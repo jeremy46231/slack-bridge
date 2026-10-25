@@ -32,7 +32,7 @@ Needs JDK 25 or newer.
 ./gradlew build
 ```
 
-The plugin is `build/libs/SlackBridge-1.0.0.jar` (Bolt, OkHttp, Gson and Java-WebSocket are shaded
+The plugin is `build/libs/SlackBridge-<version>.jar` (Bolt, OkHttp, Gson and Java-WebSocket are shaded
 and relocated under `app.jer.slackbridge.libs`). Ignore the `-thin` jar.
 
 GitHub Actions builds every push and keeps the jar as a build artifact. Pushing a tag like `v1.0.0`
