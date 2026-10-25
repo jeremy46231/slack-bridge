@@ -153,9 +153,9 @@ How it goes:
 
 1. `/slack link` shows "Click here to link your Slack account" plus the usual code. The link works
    once, for the same time as the code.
-2. The link opens a page on the server saying which Minecraft account is being linked, with a
-   warning not to continue if someone else sent the link. "Continue to Slack" goes to Slack's
-   approval screen, restricted to the bot's workspace.
+2. The link opens a one-line page on the server: "Link Steve to Slack? Only continue if Steve is
+   your Minecraft account." Its "Continue to Slack" button goes to Slack's approval screen,
+   restricted to the bot's workspace.
 3. Slack sends the player back to `/slack/callback`. The plugin checks the workspace, links the
    accounts, and keeps the player's Slack token only if they left "post as me" checked. Otherwise
    the token is revoked right away; it was only needed to learn who they are.

@@ -113,21 +113,17 @@ public class LinkWebServer {
       return;
     }
 
-    String postingNote = this.canPostAsUser() ? """
-        <p>Slack will also ask whether your Minecraft chat can be posted as real messages from your
-        Slack account. That permission is optional: if you uncheck it, your chat is posted by the
-        bot under your Slack name and photo instead.</p>""" : "";
-    this.respond(exchange, 200, "Link your Slack account", """
-        <p>You're linking the Minecraft account <strong>%1$s</strong> to your Slack account.</p>
-        <p><strong>Only continue if %1$s is your own Minecraft account.</strong> If someone sent
-        you this link, close this page: whatever %1$s types in Minecraft could show up in Slack
-        under your name.</p>
-        %2$s
-        <p>Linking again replaces any link this Minecraft account already has.</p>
-        <form method="post" action="%3$s/slack/authorize">
-          <input type="hidden" name="state" value="%4$s">
+    this.respond(exchange, 200, "Link %s to Slack?".formatted(pending.name()),
+        linkPageBody(pending.name(), this.publicUrl, state));
+  }
+
+  static String linkPageBody(String name, String publicUrl, String state) {
+    return """
+        <p>Only continue if %1$s is your Minecraft account.</p>
+        <form method="post" action="%2$s/slack/authorize">
+          <input type="hidden" name="state" value="%3$s">
           <button type="submit">Continue to Slack</button>
-        </form>""".formatted(html(pending.name()), postingNote, html(this.publicUrl), html(state)));
+        </form>""".formatted(html(name), html(publicUrl), html(state));
   }
 
   /** Step 2: forget any old post-as-you permission (so the new choice counts), then go to Slack */
@@ -174,8 +170,7 @@ public class LinkWebServer {
     this.pendingLinks.remove(state);
 
     if (query.containsKey("error") || !query.containsKey("code")) {
-      this.respond(exchange, 200, "Linking canceled", """
-          <p>Nothing was linked. Run <code>/slack link</code> in Minecraft to try again.</p>""");
+      this.respond(exchange, 200, "Canceled", "<p>Nothing was linked.</p>");
       return;
     }
     SlackBot bot = this.plugin.getSlackBot();
@@ -203,8 +198,8 @@ public class LinkWebServer {
     if (res.getTeam() == null || !bot.getTeamId().equals(res.getTeam().getId())) {
       // Someone authorized from another workspace; don't link, and don't keep their token
       bot.revokeUserToken(userToken);
-      this.respond(exchange, 200, "Wrong Slack workspace", """
-          <p>That Slack account is in a different workspace. Nothing was linked.</p>""");
+      this.respond(exchange, 200, "Wrong workspace",
+          "<p>That Slack account is in a different workspace. Nothing was linked.</p>");
       return;
     }
 
@@ -214,12 +209,9 @@ public class LinkWebServer {
     bot.completeOAuthLink(pending.uuid(), pending.name(), res.getAuthedUser().getId(), userToken,
         postsAsUser);
 
-    this.respond(exchange, 200, "Linked!", """
-        <p>The Minecraft account <strong>%s</strong> is now linked to your Slack account.</p>
-        <p>%s</p>
-        <p>You can close this tab.</p>""".formatted(html(pending.name()), postsAsUser
-        ? "Your Minecraft chat will be posted as you in Slack."
-        : "Your Minecraft chat will be posted by the bot under your Slack name and photo."));
+    this.respond(exchange, 200, "Linked",
+        "<p>%s is linked to your Slack account. You can close this tab.</p>"
+            .formatted(html(pending.name())));
   }
 
   private String redirectUri() {
@@ -227,25 +219,34 @@ public class LinkWebServer {
   }
 
   private void respondExpired(HttpExchange exchange) throws IOException {
-    this.respond(exchange, 410, "Link expired", """
-        <p>This link has expired or was already used. Run <code>/slack link</code> in Minecraft to
-        get a new one.</p>""");
+    this.respond(exchange, 410, "Link expired",
+        "<p>Run <code>/slack link</code> in Minecraft for a new one.</p>");
   }
 
   private void respondUnavailable(HttpExchange exchange) throws IOException {
-    this.respond(exchange, 503, "Try again soon", """
-        <p>The Minecraft server can't reach Slack right now. Try again in a minute.</p>""");
+    this.respond(exchange, 503, "Try again soon", "<p>The server can't reach Slack right now.</p>");
   }
 
   private void respondError(HttpExchange exchange) throws IOException {
-    this.respond(exchange, 502, "Something went wrong", """
-        <p>Slack didn't confirm the link, so nothing was linked. Run <code>/slack link</code> in
-        Minecraft to try again.</p>""");
+    this.respond(exchange, 502, "Something went wrong",
+        "<p>Nothing was linked. Run <code>/slack link</code> in Minecraft to try again.</p>");
   }
 
   private void respond(HttpExchange exchange, int status, String title, String body)
       throws IOException {
-    byte[] page = """
+    byte[] page = page(title, body).getBytes(StandardCharsets.UTF_8);
+    exchange.getResponseHeaders().set("Content-Type", "text/html; charset=utf-8");
+    exchange.getResponseHeaders().set("Cache-Control", "no-store");
+    exchange.getResponseHeaders().set("Referrer-Policy", "no-referrer");
+    exchange.getResponseHeaders().set("X-Frame-Options", "DENY");
+    exchange.sendResponseHeaders(status, page.length);
+    try (OutputStream out = exchange.getResponseBody()) {
+      out.write(page);
+    }
+  }
+
+  static String page(String title, String body) {
+    return """
         <!doctype html>
         <html lang="en">
         <head>
@@ -253,9 +254,10 @@ public class LinkWebServer {
           <meta name="viewport" content="width=device-width, initial-scale=1">
           <title>%1$s</title>
           <style>
-            body { font-family: system-ui, sans-serif; max-width: 32rem; margin: 3rem auto;
-              padding: 0 1rem; line-height: 1.5; color: #1d1c1d; background: #fff; }
-            button { font: inherit; padding: .6rem 1.2rem; border: 0; border-radius: .4rem;
+            body { font: 18px/1.5 system-ui, sans-serif; max-width: 26rem; margin: 20vh auto 0;
+              padding: 0 1rem; text-align: center; color: #1d1c1d; background: #fff; }
+            h1 { font-size: 1.5rem; }
+            button { font: inherit; padding: .6rem 1.4rem; border: 0; border-radius: .4rem;
               background: #007a5a; color: #fff; cursor: pointer; }
             @media (prefers-color-scheme: dark) { body { color: #e8e8e8; background: #1a1d21; } }
           </style>
@@ -265,16 +267,7 @@ public class LinkWebServer {
           %2$s
         </body>
         </html>
-        """.formatted(html(title), body).getBytes(StandardCharsets.UTF_8);
-
-    exchange.getResponseHeaders().set("Content-Type", "text/html; charset=utf-8");
-    exchange.getResponseHeaders().set("Cache-Control", "no-store");
-    exchange.getResponseHeaders().set("Referrer-Policy", "no-referrer");
-    exchange.getResponseHeaders().set("X-Frame-Options", "DENY");
-    exchange.sendResponseHeaders(status, page.length);
-    try (OutputStream out = exchange.getResponseBody()) {
-      out.write(page);
-    }
+        """.formatted(html(title), body);
   }
 
   private static Map<String, String> query(HttpExchange exchange) {
