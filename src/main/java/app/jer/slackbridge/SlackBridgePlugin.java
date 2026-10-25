@@ -3,6 +3,7 @@ package app.jer.slackbridge;
 import app.jer.slackbridge.commands.SlackCommand;
 import app.jer.slackbridge.listeners.LinkRequirementListener;
 import app.jer.slackbridge.slack.SlackBot;
+import java.util.Locale;
 import java.util.logging.Level;
 import org.bukkit.command.PluginCommand;
 import org.bukkit.plugin.IllegalPluginAccessException;
@@ -15,7 +16,10 @@ public class SlackBridgePlugin extends JavaPlugin {
   private static final long MAX_RETRY_SECONDS = 5 * 60;
   private static final long TICKS_PER_SECOND = 20;
 
+  public enum JoinRequirement { NONE, LINKED, CHANNEL }
+
   private LinkStore linkStore;
+  private JoinRequirement joinRequirement = JoinRequirement.NONE;
   private volatile SlackBot bot;
   private int failedStarts = 0;
 
@@ -26,6 +30,17 @@ public class SlackBridgePlugin extends JavaPlugin {
 
     this.linkStore = new LinkStore(this);
     this.linkStore.load();
+
+    String joinRequirementSetting = this.getConfig()
+        .getString("settings.slack-link.join-requirement", "none").trim().toUpperCase(Locale.ROOT);
+    try {
+      this.joinRequirement = JoinRequirement.valueOf(joinRequirementSetting);
+    } catch (IllegalArgumentException e) {
+      // A typo shouldn't open the server up, so fall back to the strictest mode
+      this.getLogger().severe("Unknown join-requirement \"" + joinRequirementSetting.toLowerCase(Locale.ROOT)
+          + "\"; expected none, linked or channel. Using channel.");
+      this.joinRequirement = JoinRequirement.CHANNEL;
+    }
 
     boolean enabled = this.getConfig().getBoolean("settings.slack-link.enabled", false);
     if (enabled) {
@@ -47,18 +62,11 @@ public class SlackBridgePlugin extends JavaPlugin {
     }
 
     // Register event listeners (the bot registers itself once it connects)
-    String joinRequirement = this.getConfig()
-        .getString("settings.slack-link.join-requirement", "none").toLowerCase();
-    if (!joinRequirement.equals("none")) {
-      if (!joinRequirement.equals("linked") && !joinRequirement.equals("channel")) {
-        // A typo shouldn't open the server up, so fall back to the strictest mode
-        this.getLogger().severe("Unknown join-requirement \"" + joinRequirement
-            + "\"; expected none, linked or channel. Using channel.");
-        joinRequirement = "channel";
-      }
+    if (this.joinRequirement != JoinRequirement.NONE) {
       if (enabled) {
         this.getServer().getPluginManager().registerEvents(
-            new LinkRequirementListener(this, joinRequirement.equals("channel")), this);
+            new LinkRequirementListener(this, this.joinRequirement == JoinRequirement.CHANNEL),
+            this);
       } else {
         this.getLogger().warning("join-requirement is ignored while Slack is disabled");
       }
@@ -123,6 +131,15 @@ public class SlackBridgePlugin extends JavaPlugin {
     } catch (Exception e) {
       this.getLogger().log(Level.WARNING, "Error while stopping the Slack bot", e);
     }
+  }
+
+  public JoinRequirement getJoinRequirement() {
+    return this.joinRequirement;
+  }
+
+  /** In channel mode, only members of the bridge channel may join or use the Slack command. */
+  public boolean isChannelOnly() {
+    return this.joinRequirement == JoinRequirement.CHANNEL;
   }
 
   public LinkStore getLinkStore() {

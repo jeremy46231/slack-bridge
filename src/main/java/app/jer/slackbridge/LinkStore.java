@@ -70,6 +70,10 @@ public class LinkStore {
     }
   }
 
+  public Map<UUID, Link> getLinks() {
+    return Map.copyOf(this.links);
+  }
+
   public String getSlackId(UUID uuid) {
     Link link = this.links.get(uuid);
     return link == null ? null : link.slackId();

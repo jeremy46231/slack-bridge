@@ -174,6 +174,10 @@ public class SlackBot implements Listener {
       plugin.getLogger().info(
           "Received slack command from %s: \"/%s %s\"".formatted(userId, commandBase, text));
 
+      if (this.plugin.isChannelOnly() && !this.getChannelMembers().contains(userId)) {
+        return ctx.ack("Only members of <#%s> can use this command.".formatted(this.channelId));
+      }
+
       String[] args = text.split("\\s+", 2);
       String argument = args.length > 1 ? args[1].trim() : "";
       return switch (args[0].toLowerCase()) {
@@ -219,6 +223,20 @@ public class SlackBot implements Listener {
 
   public String getCommandBase() {
     return this.commandBase;
+  }
+
+  public String getChannelId() {
+    return this.channelId;
+  }
+
+  /** A Slack user's display name, falling back to their real name and then their username. */
+  public static String displayNameOf(User user) {
+    String profileName = user.getProfile() == null ? null : user.getProfile().getDisplayName();
+    if (profileName != null && !profileName.isBlank()) {
+      return profileName;
+    }
+    return user.getRealName() != null && !user.getRealName().isBlank() ? user.getRealName()
+        : user.getName();
   }
 
   /** What in-game messages call the Slack workspace, e.g. "Slack" or "the Hack Club Slack". */

@@ -6,9 +6,12 @@ description: Two-way Slack chat bridge and Slack account linking (forked from HC
 commands:
   slack:
     description: Manage your Slack account link
-    usage: /<command> <info | link <slackId> | unlink | lookup <player>>
+    usage: /<command> <info | link [slackId] | unlink | lookup <player> | admin>
     permission: slackbridge.command.slack
 permissions:
   slackbridge.command.slack:
     description: Use /slack info, link, unlink and lookup
     default: true
+  slackbridge.admin:
+    description: Use /slack admin to link, unlink and list other players' accounts
+    default: op

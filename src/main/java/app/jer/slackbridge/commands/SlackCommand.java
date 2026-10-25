@@ -20,14 +20,20 @@ import org.jetbrains.annotations.NotNull;
 public class SlackCommand implements TabExecutor {
 
   private final SlackBridgePlugin plugin;
+  private final AdminCommand adminCommand;
 
   public SlackCommand(SlackBridgePlugin plugin) {
     this.plugin = plugin;
+    this.adminCommand = new AdminCommand(plugin);
   }
 
   @Override
   public boolean onCommand(@NotNull CommandSender sender, @NotNull Command cmd,
       @NotNull String alias, String[] args) {
+    if (args.length > 0 && args[0].equalsIgnoreCase("admin")) {
+      return this.adminCommand.onCommand(sender, Arrays.copyOfRange(args, 1, args.length));
+    }
+
     SlackBot bot = this.plugin.getSlackBot();
     if (bot == null) {
       sender.sendMessage(SlackMessages.slackDisabled());
@@ -140,9 +146,8 @@ public class SlackCommand implements TabExecutor {
               return;
             }
 
-            String slackName = slackUser.getProfile().getDisplayName();
             sender.sendMessage(SlackMessages.slackUsername(lookupPlayer.getName(),
-                slackName == null || slackName.isBlank() ? slackUser.getRealName() : slackName));
+                SlackBot.displayNameOf(slackUser)));
           } catch (IOException e) {
             sender.sendMessage(SlackMessages.lookupError());
           }
@@ -158,6 +163,9 @@ public class SlackCommand implements TabExecutor {
   @Override
   public List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command cmd,
       @NotNull String alias, String[] args) {
+    if (args.length > 1 && args[0].equalsIgnoreCase("admin")) {
+      return this.adminCommand.onTabComplete(sender, Arrays.copyOfRange(args, 1, args.length));
+    }
     if (!(sender instanceof Player sendingPlayer)) {
       return null;
     }
@@ -165,7 +173,10 @@ public class SlackCommand implements TabExecutor {
     List<String> completions = new ArrayList<>();
     switch (args.length) {
       case 1 -> {
-        List<String> subcommands = Arrays.asList("info", "link", "unlink", "lookup");
+        List<String> subcommands = new ArrayList<>(List.of("info", "link", "unlink", "lookup"));
+        if (sender.hasPermission(AdminCommand.PERMISSION)) {
+          subcommands.add("admin");
+        }
         StringUtil.copyPartialMatches(args[0], subcommands, completions);
       }
       case 2 -> {

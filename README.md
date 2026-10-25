@@ -145,8 +145,18 @@ In game (`/slack`, permission `slackbridge.command.slack`, everyone by default):
 | `/slack unlink` | Removes your link |
 | `/slack lookup <player>` | Shows the Slack name a player is linked to |
 
+Admin commands (`/slack admin`, permission `slackbridge.admin`, operators by default; they also work
+from the server console):
+
+| Command | What it does |
+| --- | --- |
+| `/slack admin link <player or uuid> <slack member id>` | Links an account directly, without the Slack confirmation. Works for players who have never joined (looked up with Mojang); use the UUID for Bedrock players. |
+| `/slack admin unlink <player or uuid>` | Removes someone's link |
+| `/slack admin list` | Every linked account with its Slack name and ID |
+| `/slack admin status` | Whether Slack is connected, plus the channel, slash command, join requirement and number of links |
+
 In Slack (your configured command, shown here as `/mc`; replies are only visible to you except
-`players`):
+`players`). With `join-requirement: channel`, only members of the bridge channel can use it:
 
 | Command | What it does |
 | --- | --- |
@@ -170,7 +180,8 @@ In Slack (your configured command, shown here as `/mc`; replies are only visible
 - An unlinked player who tries to join is turned away with a code to run as `/mc link <code>`; once
   that's done they can join. Linked accounts whose Slack user has been deactivated are turned away
   the same way.
-- With `channel`, a linked player who isn't in the channel is told which channel to ask to join.
+- With `channel`, a linked player who isn't in the channel is told which channel to ask to join, and
+  only channel members can use the Slack slash command.
   The member list is fetched from Slack at most once a minute.
 - If Slack can't be reached once the bot is connected, linked players are let in under `linked`. Under `channel` the last
   member list fetched is used, and nobody but operators gets in if none has been fetched yet.
@@ -198,7 +209,7 @@ Bedrock one through Floodgate).
   are kept in one `links.yml` instead of per-player JSON files.
 - `required: true/false` became `join-requirement`, which adds a channel-members-only mode; operators
   bypass it.
-- Added `/slack link` (code), `/slack unlink`, per-event toggles and icons, a configurable avatar
+- Added `/slack link` (code), `/slack unlink`, `/slack admin`, per-event toggles and icons, a configurable avatar
   URL, and environment-variable fallbacks for the tokens, channel and slash command.
 
 ## License

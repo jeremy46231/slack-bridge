@@ -53,7 +53,8 @@ public final class SlackMessages {
 
   public static Component linkCode(String baseCommand, String slackName, String code, int seconds) {
     return miniMessage().deserialize("""
-            <green>Run <click:copy_to_clipboard:'/<basecommand> link <code>'><hover:show_text:'Click to copy'><gold>/<basecommand> link <code></gold></hover></click> in <slackname> to link your account.</green>
+            <green>Run this in <slackname> to link your account:</green>
+            <click:copy_to_clipboard:'/<basecommand> link <code>'><hover:show_text:'Click to copy'><gold>/<basecommand> link <code></gold> <gray>(click to copy)</gray></hover></click>
             <i>This code expires in <seconds> seconds.</i>""",
         TagResolver.resolver(Placeholder.unparsed("basecommand", baseCommand),
             Placeholder.unparsed("slackname", slackName),
@@ -67,8 +68,8 @@ public final class SlackMessages {
   public static Component unlinked(String baseCommand, String slackName, String slackIdHelp) {
     return miniMessage().deserialize("""
             <b><red>Link your Minecraft account with <slackname></red></b>
-            <gold><b>Either:</b></gold> run <click:run_command:'/slack link'><hover:show_text:'Click to run'><green>/slack link</green></hover></click> to get a code, then run <gold>/<basecommand> link <code></gold> in <slackname>
-            <gold><b>Or:</b></gold> run <click:suggest_command:'/slack link '><hover:show_text:'Click to Autofill'><green>/slack link <your slack member id></green></hover></click>
+            <gold><b>Either:</b></gold> run <click:run_command:'/slack link'><hover:show_text:'Click to run'><green>/slack link</green> <gray>(click to run)</gray></hover></click> to get a code, then run <gold>/<basecommand> link <code></gold> in <slackname>
+            <gold><b>Or:</b></gold> run <click:suggest_command:'/slack link '><hover:show_text:'Click to fill in'><green>/slack link <your slack member id></green> <gray>(click to fill in)</gray></hover></click>
                <idhelp>""",
         TagResolver.resolver(Placeholder.unparsed("basecommand", baseCommand),
             Placeholder.unparsed("slackname", slackName),
@@ -157,6 +158,63 @@ public final class SlackMessages {
   public static Component verificationSent() {
     return miniMessage().deserialize(
         "<green>A verification message has been sent to your Slack account.</green>");
+  }
+
+  public static Component noPermission() {
+    return miniMessage().deserialize("<red>You don't have permission to do that.</red>");
+  }
+
+  public static Component adminUsage() {
+    return miniMessage().deserialize("""
+        <gold><b>/slack admin</b></gold>
+        <green>/slack admin link <player or uuid> <slack member id></green> <gray>link without the Slack confirmation</gray>
+        <green>/slack admin unlink <player or uuid></green> <gray>remove someone's link</gray>
+        <green>/slack admin list</green> <gray>show every linked account</gray>
+        <green>/slack admin status</green> <gray>show the Slack connection and settings</gray>""");
+  }
+
+  public static Component adminPlayerNotFound(String query) {
+    return miniMessage().deserialize("<red>Couldn't find a Minecraft player called <query>.</red>",
+        Placeholder.unparsed("query", query));
+  }
+
+  public static Component adminLinked(String playerName, String slackName) {
+    return miniMessage().deserialize("<green>Linked <player> to <slackname> on Slack.</green>",
+        TagResolver.resolver(Placeholder.unparsed("player", playerName),
+            Placeholder.unparsed("slackname", slackName)));
+  }
+
+  public static Component adminUnlinked(String playerName) {
+    return miniMessage().deserialize("<green>Unlinked <player>'s Slack account.</green>",
+        Placeholder.unparsed("player", playerName));
+  }
+
+  public static Component adminListHeader(int count) {
+    return miniMessage().deserialize("<gold><b>Linked accounts</b></gold> <gray>(<count>)</gray>",
+        Placeholder.unparsed("count", String.valueOf(count)));
+  }
+
+  public static Component adminListEntry(String playerName, String slackId, String slackName) {
+    return miniMessage().deserialize("<player> <gray>→</gray> <slack>",
+        TagResolver.resolver(Placeholder.unparsed("player", playerName),
+            Placeholder.unparsed("slack",
+                slackName == null ? slackId : slackName + " (" + slackId + ")")));
+  }
+
+  public static Component adminStatus(String connection, String channel, String command,
+      String joinRequirement, int links) {
+    return miniMessage().deserialize("""
+            <gold><b>SlackBridge status</b></gold>
+            Slack: <connection>
+            Channel: <channel>
+            Slash command: <command>
+            Join requirement: <joinrequirement>
+            Linked accounts: <links>""",
+        TagResolver.resolver(Placeholder.unparsed("connection", connection),
+            Placeholder.unparsed("channel", channel.isEmpty() ? "(not set)" : channel),
+            Placeholder.unparsed("command", command),
+            Placeholder.unparsed("joinrequirement", joinRequirement),
+            Placeholder.unparsed("links", String.valueOf(links))));
   }
 
   public static Component mustBePlayer() {
