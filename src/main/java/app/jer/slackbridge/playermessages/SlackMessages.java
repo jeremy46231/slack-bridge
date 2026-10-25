@@ -5,6 +5,8 @@ import static net.kyori.adventure.text.minimessage.MiniMessage.miniMessage;
 
 import com.slack.api.model.User;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.event.ClickEvent;
+import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
 import org.bukkit.entity.Player;
@@ -52,13 +54,18 @@ public final class SlackMessages {
   }
 
   public static Component linkCode(String baseCommand, String slackName, String code, int seconds) {
+    // MiniMessage doesn't fill placeholders into click arguments, so the clickable part is built here
+    String command = "/%s link %s".formatted(baseCommand, code);
+    Component copyable = text().append(text(command, NamedTextColor.GOLD))
+        .append(text(" (click to copy)", NamedTextColor.GRAY))
+        .clickEvent(ClickEvent.copyToClipboard(command)).hoverEvent(text("Click to copy")).build();
+
     return miniMessage().deserialize("""
             <green>Run this in <slackname> to link your account:</green>
-            <click:copy_to_clipboard:'/<basecommand> link <code>'><hover:show_text:'Click to copy'><gold>/<basecommand> link <code></gold> <gray>(click to copy)</gray></hover></click>
+            <command>
             <i>This code expires in <seconds> seconds.</i>""",
-        TagResolver.resolver(Placeholder.unparsed("basecommand", baseCommand),
+        TagResolver.resolver(Placeholder.component("command", copyable),
             Placeholder.unparsed("slackname", slackName),
-            Placeholder.unparsed("code", code),
             Placeholder.unparsed("seconds", String.valueOf(seconds))));
   }
 
