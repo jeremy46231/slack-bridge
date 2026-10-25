@@ -30,11 +30,13 @@ import io.papermc.paper.advancement.AdvancementDisplay;
 import io.papermc.paper.event.player.AsyncChatEvent;
 import java.io.IOException;
 import java.security.SecureRandom;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -67,6 +69,7 @@ public class SlackBot implements Listener {
       "In Slack, open your profile, click <b>⋮</b> and choose <i>Copy member ID</i>";
   private static final int MAX_NAME_LENGTH = 16;
   private static final long USER_CACHE_MILLIS = 10 * 60 * 1000;
+  private static final long CHANNEL_MEMBERS_CACHE_MILLIS = 60 * 1000;
   // <@U123>, <@U123|name>, <#C123|channel>, <!here>, <!subteam^S123|@team>, <https://url|label>
   private static final Pattern SLACK_ENTITY = Pattern.compile("<([@#!]?)([^<>|]+)(?:\\|([^<>]*))?>");
 
@@ -92,6 +95,9 @@ public class SlackBot implements Listener {
   private final Map<UUID, LinkCode> mcLinkCodes = new ConcurrentHashMap<>();
   private final Map<UUID, PendingVerification> pendingVerifications = new ConcurrentHashMap<>();
   private final Map<String, CachedUser> userCache = new ConcurrentHashMap<>();
+  private volatile Set<String> channelMembers = Set.of();
+  private long channelMembersFetchedAt = 0;
+  private volatile String channelName;
   private final SecureRandom random = new SecureRandom();
   // Posts to Slack in order without blocking the server thread
   private final ExecutorService outbox = Executors.newSingleThreadExecutor(
@@ -287,28 +293,81 @@ public class SlackBot implements Listener {
         escape(advancementName)), this.icon("advancement"), "Advancement");
   }
 
+  public enum JoinCheck { ALLOWED, NOT_LINKED, NOT_IN_CHANNEL }
+
   /**
-   * Whether a linked account may join. Unlinked accounts may not; deactivated Slack accounts may
-   * not. If Slack can't be reached, linked accounts are let in.
+   * Whether a player may join. Unlinked accounts may not; deactivated Slack accounts may not; with
+   * requireChannel, the linked Slack account must also be a member of the bridge channel. If Slack
+   * can't be reached, linked accounts are let in, but channel membership falls back to the last list
+   * fetched (and is denied if there is none).
    */
-  public boolean isJoinAllowed(UUID uuid) {
+  public JoinCheck checkJoin(UUID uuid, boolean requireChannel) {
     String slackId = this.plugin.getLinkStore().getSlackId(uuid);
     if (slackId == null) {
-      return false;
+      return JoinCheck.NOT_LINKED;
     }
 
     try {
       var res = app.client().usersInfo(r -> r.token(this.botToken).user(slackId));
-      if (!res.isOk()) {
-        // user_not_found means the account is gone; anything else is on Slack's side
-        return !"user_not_found".equals(res.getError());
+      // user_not_found means the account is gone; other errors are on Slack's side
+      if (res.isOk() ? res.getUser().isDeleted() : "user_not_found".equals(res.getError())) {
+        return JoinCheck.NOT_LINKED;
       }
-      return !res.getUser().isDeleted();
     } catch (IOException | SlackApiException e) {
       this.plugin.getLogger().log(Level.WARNING,
-          "Could not check Slack account " + slackId + ", letting the player in", e);
-      return true;
+          "Could not check whether Slack account " + slackId + " is active; assuming it is", e);
     }
+
+    if (requireChannel && !this.getChannelMembers().contains(slackId)) {
+      return JoinCheck.NOT_IN_CHANNEL;
+    }
+    return JoinCheck.ALLOWED;
+  }
+
+  /** Member IDs of the bridge channel, refreshed at most every CHANNEL_MEMBERS_CACHE_MILLIS. */
+  private synchronized Set<String> getChannelMembers() {
+    if (System.currentTimeMillis() - this.channelMembersFetchedAt < CHANNEL_MEMBERS_CACHE_MILLIS) {
+      return this.channelMembers;
+    }
+
+    Set<String> members = new HashSet<>();
+    String cursor = null;
+    try {
+      do {
+        String page = cursor;
+        var res = app.client().conversationsMembers(
+            r -> r.token(this.botToken).channel(this.channelId).limit(1000).cursor(page));
+        if (!res.isOk()) {
+          throw new IOException("conversations.members failed: " + res.getError());
+        }
+        members.addAll(res.getMembers());
+        cursor = res.getResponseMetadata() == null ? null
+            : res.getResponseMetadata().getNextCursor();
+      } while (cursor != null && !cursor.isEmpty());
+    } catch (IOException | SlackApiException e) {
+      this.plugin.getLogger().log(Level.WARNING,
+          "Could not list the Slack channel's members; using the last list fetched", e);
+      return this.channelMembers;
+    }
+
+    this.channelMembers = Set.copyOf(members);
+    this.channelMembersFetchedAt = System.currentTimeMillis();
+    return this.channelMembers;
+  }
+
+  /** The bridge channel's name for kick messages, falling back to "the server's Slack channel". */
+  public String getChannelName() {
+    if (this.channelName == null) {
+      try {
+        var res = app.client().conversationsInfo(r -> r.token(this.botToken).channel(this.channelId));
+        if (res.isOk()) {
+          this.channelName = "#" + res.getChannel().getName();
+        }
+      } catch (IOException | SlackApiException e) {
+        this.plugin.getLogger().log(Level.WARNING, "Could not look up the Slack channel's name", e);
+      }
+    }
+    return this.channelName == null ? "the server's Slack channel" : this.channelName;
   }
 
   public User getUserInfo(String id) throws IOException {

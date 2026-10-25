@@ -37,6 +37,14 @@ public final class SlackMessages {
             Placeholder.unparsed("seconds", String.valueOf(seconds))));
   }
 
+  public static Component mustBeInChannel(String channelName, String slackName) {
+    return miniMessage().deserialize("""
+            <b><red>Only members of <channel> in <slackname> can join this server!</red></b>
+            Your linked Slack account isn't in that channel. Ask someone there to add you, then try again.""",
+        TagResolver.resolver(Placeholder.unparsed("channel", channelName),
+            Placeholder.unparsed("slackname", slackName)));
+  }
+
   public static Component slackRequiredButUnavailable() {
     return miniMessage().deserialize("""
         <red>This server requires a linked Slack account, but its Slack bot is not running.

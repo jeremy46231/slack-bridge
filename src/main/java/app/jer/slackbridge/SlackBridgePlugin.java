@@ -46,8 +46,21 @@ public class SlackBridgePlugin extends JavaPlugin {
     if (this.bot != null) {
       this.getServer().getPluginManager().registerEvents(this.bot, this);
     }
-    if (enabled && this.getConfig().getBoolean("settings.slack-link.required", false)) {
-      this.getServer().getPluginManager().registerEvents(new LinkRequirementListener(this), this);
+    String joinRequirement = this.getConfig()
+        .getString("settings.slack-link.join-requirement", "none").toLowerCase();
+    if (!joinRequirement.equals("none")) {
+      if (!joinRequirement.equals("linked") && !joinRequirement.equals("channel")) {
+        // A typo shouldn't open the server up, so fall back to the strictest mode
+        this.getLogger().severe("Unknown join-requirement \"" + joinRequirement
+            + "\"; expected none, linked or channel. Using channel.");
+        joinRequirement = "channel";
+      }
+      if (enabled) {
+        this.getServer().getPluginManager().registerEvents(
+            new LinkRequirementListener(this, joinRequirement.equals("channel")), this);
+      } else {
+        this.getLogger().warning("join-requirement is ignored while Slack is disabled");
+      }
     }
   }
 

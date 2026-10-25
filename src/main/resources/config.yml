@@ -2,8 +2,12 @@ settings:
   slack-link:
     # Whether the Slack integration is enabled
     enabled: false
-    # Whether to require a Slack link to join the server
-    required: false
+    # Who may join the server:
+    #   none    - anyone the server otherwise allows
+    #   linked  - players who have linked an active Slack account in the workspace
+    #   channel - linked players whose Slack account is also a member of channel-id
+    # Server operators always bypass this, and Minecraft's whitelist still applies on top of it.
+    join-requirement: "none"
     # Time in seconds after which the code will expire
     link-code-expiration: 600
     # The Slack bot token (xoxb-...). Leave empty to read the SLACK_BOT_TOKEN environment variable.

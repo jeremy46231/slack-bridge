@@ -14,8 +14,10 @@ What it does:
   in Slack.
 - **Game events** posted to Slack: joins and leaves, deaths, advancements, and server start and stop.
   Each can be turned off. Players vanished with EssentialsX are not announced.
-- **Account linking** with `/slack` in game and your own slash command in Slack, with an optional
-  "must be linked to join" mode.
+- **Account linking** with `/slack` in game and your own slash command in Slack.
+- **Join requirements** (optional): only let in players with a linked Slack account, or only those
+  whose linked account is a member of the bridge channel, so the channel works as a whitelist.
+  Operators always get in.
 
 Built for Paper 26.3 (Java 25). Package `app.jer.slackbridge`, plugin name `SlackBridge`, so it
 can't collide with HCCore.
@@ -54,6 +56,7 @@ Why each scope is there:
 | Scope | Used for |
 | --- | --- |
 | `channels:history`, `groups:history` | Receiving messages from the bridge channel (public or private) |
+| `channels:read`, `groups:read` | Listing the channel's members for `join-requirement: channel`, and its name for messages |
 | `chat:write` | Posting to the channel and sending link-verification DMs |
 | `chat:write.customize` | Posting under each player's name and head, and event posts under their own name and emoji |
 | `commands` | The slash command |
@@ -83,7 +86,7 @@ then edit it:
 settings:
   slack-link:
     enabled: true          # turn the bridge on
-    required: false        # true = players must link Slack before they can join
+    join-requirement: "none"  # none, linked or channel; see "Join requirements" below
     link-code-expiration: 600
     bot-token: ""          # leave empty to use SLACK_BOT_TOKEN
     app-token: ""          # leave empty to use SLACK_APP_TOKEN
@@ -113,8 +116,8 @@ container environment variable reaches the server process, so set `SLACK_BOT_TOK
 and leave those config values empty. Restart the server after changing either.
 
 If `enabled` is true but a token, the channel ID or the slash command is missing, the plugin logs
-which one and stays off. With `required: true` and the bot not running, nobody can join, so check
-the log after setting it up.
+which one and stays off. With a join requirement on and the bot not running, only operators can
+join, so check the log after setting it up.
 
 `slack-name` and `slack-id-help` set the wording of the in-game linking instructions. For the Hack
 Club Slack, where `/id` shows your member ID:
@@ -148,9 +151,27 @@ In Slack (your configured command, shown here as `/mc`; replies are only visible
 | `/mc link <code>` | Links your Slack account using a code from the game or the join screen |
 | `/mc lookup <@user or player>` | Shows which accounts are linked |
 
-With `required: true`, an unlinked player who tries to join is turned away with a code to run as
-`/mc link <code>`; once that's done they can join. Linked accounts whose Slack user has been
-deactivated are turned away too. If Slack can't be reached, linked players are let in.
+## Join requirements
+
+`join-requirement` decides who may join:
+
+| Value | Who gets in |
+| --- | --- |
+| `none` | Anyone the server otherwise allows (default) |
+| `linked` | Players who have linked an active Slack account. Anyone in the workspace can link, so in a big workspace this alone doesn't keep a server private. |
+| `channel` | Linked players whose Slack account is a member of the bridge channel. Adding or removing someone from the channel adds or removes their access, like a whitelist. |
+
+- Server operators (`ops.json`) always get in, whatever the setting.
+- Minecraft's own whitelist still applies on top: a player has to pass both. With `channel` you can
+  leave the whitelist off and manage access from Slack instead.
+- An unlinked player who tries to join is turned away with a code to run as `/mc link <code>`; once
+  that's done they can join. Linked accounts whose Slack user has been deactivated are turned away
+  the same way.
+- With `channel`, a linked player who isn't in the channel is told which channel to ask to join.
+  The member list is fetched from Slack at most once a minute.
+- If Slack can't be reached, linked players are let in under `linked`. Under `channel` the last
+  member list fetched is used, and nobody but operators gets in if none has been fetched yet.
+- An unrecognised value is treated as `channel`, so a typo can't open the server up.
 
 One Slack account may be linked to several Minecraft accounts (for example a Java account and a
 Bedrock one through Floodgate).
@@ -171,6 +192,8 @@ Bedrock one through Floodgate).
   the prompt is replaced with the result.
 - Player names come from the server's display name (so EssentialsX nicknames show up), and links
   are kept in one `links.yml` instead of per-player JSON files.
+- `required: true/false` became `join-requirement`, which adds a channel-members-only mode; operators
+  bypass it.
 - Added `/slack link` (code), `/slack unlink`, per-event toggles and icons, a configurable avatar
   URL, and environment-variable fallbacks for the tokens, channel and slash command.
 
