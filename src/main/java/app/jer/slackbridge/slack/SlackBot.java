@@ -190,7 +190,18 @@ public class SlackBot implements Listener {
     });
 
     this.socketModeApp = new SocketModeApp(appToken, SocketModeClient.Backend.JavaWebSocket, app);
-    this.socketModeApp.startAsync();
+    try {
+      this.socketModeApp.startAsync();
+    } catch (Exception e) {
+      // Don't leave a half-open connection behind when the plugin retries with a new bot
+      try {
+        this.socketModeApp.close();
+      } catch (Exception closeException) {
+        e.addSuppressed(closeException);
+      }
+      this.outbox.shutdownNow();
+      throw e;
+    }
     this.plugin.getLogger().info("Slack bridge started!");
     if (this.isEventEnabled("server-start-stop")) {
       sendMessage(":large_green_circle: *Server Started*", this.icon("server"), "Console");

@@ -47,8 +47,8 @@ public final class SlackMessages {
 
   public static Component slackRequiredButUnavailable() {
     return miniMessage().deserialize("""
-        <red>This server requires a linked Slack account, but its Slack bot is not running.
-        Please let a server admin know.</red>""");
+        <red>This server requires a linked Slack account, but it can't reach Slack right now.
+        Try again in a minute. If this keeps happening, please let a server admin know.</red>""");
   }
 
   public static Component linkCode(String baseCommand, String slackName, String code, int seconds) {

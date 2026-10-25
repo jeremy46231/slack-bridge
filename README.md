@@ -116,8 +116,11 @@ container environment variable reaches the server process, so set `SLACK_BOT_TOK
 and leave those config values empty. Restart the server after changing either.
 
 If `enabled` is true but a token, the channel ID or the slash command is missing, the plugin logs
-which one and stays off. With a join requirement on and the bot not running, only operators can
-join, so check the log after setting it up.
+which one and stays off. If it can't connect to Slack (Slack is down, the network isn't up yet, or a
+token is wrong), it logs the error and tries again after 30 seconds, doubling the wait up to every 5
+minutes until it connects; once connected, Slack's Socket Mode client reconnects on its own. While
+it isn't connected, only operators can join if a join requirement is on, so check the log after
+setting it up.
 
 `slack-name` and `slack-id-help` set the wording of the in-game linking instructions. For the Hack
 Club Slack, where `/id` shows your member ID:
@@ -169,7 +172,7 @@ In Slack (your configured command, shown here as `/mc`; replies are only visible
   the same way.
 - With `channel`, a linked player who isn't in the channel is told which channel to ask to join.
   The member list is fetched from Slack at most once a minute.
-- If Slack can't be reached, linked players are let in under `linked`. Under `channel` the last
+- If Slack can't be reached once the bot is connected, linked players are let in under `linked`. Under `channel` the last
   member list fetched is used, and nobody but operators gets in if none has been fetched yet.
 - An unrecognised value is treated as `channel`, so a typo can't open the server up.
 
@@ -180,7 +183,8 @@ Bedrock one through Floodgate).
 
 - Only the Slack bridge and account linking are left; HCCore's other features, and its dependencies
   on ProtocolLib, UltimateAdvancementAPI, SuperVanish and PlaceholderAPI, are gone.
-- Socket Mode (app token) instead of an HTTP server with a signing secret.
+- Socket Mode (app token) instead of an HTTP server with a signing secret, and the bot keeps retrying
+  if Slack can't be reached when the server starts.
 - Built against Paper 26.3 and Java 25, with Slack Bolt 1.52.0.
 - No workspace-specific branding: the slash command must be configured, the linking instructions
   are configurable, and event posts use Slack emoji instead of hosted images.

@@ -5,12 +5,19 @@ import app.jer.slackbridge.listeners.LinkRequirementListener;
 import app.jer.slackbridge.slack.SlackBot;
 import java.util.logging.Level;
 import org.bukkit.command.PluginCommand;
+import org.bukkit.plugin.IllegalPluginAccessException;
 import org.bukkit.plugin.java.JavaPlugin;
 
 public class SlackBridgePlugin extends JavaPlugin {
 
+  // Wait between attempts to reach Slack: 30s, doubling up to 5 minutes, retrying until it works
+  private static final long FIRST_RETRY_SECONDS = 30;
+  private static final long MAX_RETRY_SECONDS = 5 * 60;
+  private static final long TICKS_PER_SECOND = 20;
+
   private LinkStore linkStore;
-  private SlackBot bot;
+  private volatile SlackBot bot;
+  private int failedStarts = 0;
 
   @Override
   public void onEnable() {
@@ -24,11 +31,8 @@ public class SlackBridgePlugin extends JavaPlugin {
     if (enabled) {
       String missing = this.missingSettings();
       if (missing.isEmpty()) {
-        try {
-          this.bot = new SlackBot(this);
-        } catch (Exception e) {
-          this.getLogger().log(Level.SEVERE, "Could not start the Slack bot", e);
-        }
+        // Connecting is network I/O, so it happens off the server thread
+        this.getServer().getScheduler().runTaskAsynchronously(this, this::startBot);
       } else {
         this.getLogger().severe("Slack is enabled but " + missing + " not set; see the README");
       }
@@ -42,10 +46,7 @@ public class SlackBridgePlugin extends JavaPlugin {
       command.setTabCompleter(slackCommand);
     }
 
-    // Register event listeners
-    if (this.bot != null) {
-      this.getServer().getPluginManager().registerEvents(this.bot, this);
-    }
+    // Register event listeners (the bot registers itself once it connects)
     String joinRequirement = this.getConfig()
         .getString("settings.slack-link.join-requirement", "none").toLowerCase();
     if (!joinRequirement.equals("none")) {
@@ -66,14 +67,61 @@ public class SlackBridgePlugin extends JavaPlugin {
 
   @Override
   public void onDisable() {
-    if (this.bot != null) {
-      try {
-        this.bot.disconnect();
-      } catch (Exception e) {
-        this.getLogger().log(Level.WARNING, "Error while stopping the Slack bot", e);
-      }
-
+    SlackBot bot = this.bot;
+    if (bot != null) {
+      stopBot(bot);
       this.bot = null;
+    }
+  }
+
+  /** Connects to Slack, and if that fails, tries again later. Runs off the server thread. */
+  private void startBot() {
+    if (!this.isEnabled()) {
+      return;
+    }
+
+    SlackBot newBot;
+    try {
+      newBot = new SlackBot(this);
+    } catch (Exception e) {
+      long delay = Math.min(FIRST_RETRY_SECONDS << Math.min(this.failedStarts, 10), MAX_RETRY_SECONDS);
+      this.failedStarts++;
+      if (this.failedStarts == 1) {
+        this.getLogger().log(Level.SEVERE,
+            "Could not start the Slack bot; retrying in " + delay + " seconds", e);
+      } else {
+        this.getLogger().warning("Could not start the Slack bot (attempt " + this.failedStarts
+            + ", " + e.getMessage() + "); retrying in " + delay + " seconds");
+      }
+      try {
+        this.getServer().getScheduler()
+            .runTaskLaterAsynchronously(this, this::startBot, delay * TICKS_PER_SECOND);
+      } catch (IllegalPluginAccessException ignored) {
+        // The plugin was disabled meanwhile; stop retrying
+      }
+      return;
+    }
+
+    if (this.failedStarts > 0) {
+      this.getLogger().info("Connected to Slack after " + this.failedStarts + " failed attempts");
+    }
+    // Set right away so onDisable can always find the bot to disconnect it
+    this.bot = newBot;
+    try {
+      this.getServer().getScheduler().runTask(this,
+          () -> this.getServer().getPluginManager().registerEvents(newBot, this));
+    } catch (IllegalPluginAccessException e) {
+      // The plugin was disabled while connecting
+      this.bot = null;
+      stopBot(newBot);
+    }
+  }
+
+  private void stopBot(SlackBot bot) {
+    try {
+      bot.disconnect();
+    } catch (Exception e) {
+      this.getLogger().log(Level.WARNING, "Error while stopping the Slack bot", e);
     }
   }
 
