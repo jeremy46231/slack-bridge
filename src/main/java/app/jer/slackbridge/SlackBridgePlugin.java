@@ -155,30 +155,28 @@ public class SlackBridgePlugin extends JavaPlugin {
     return this.joinRequirement == JoinRequirement.CHANNEL;
   }
 
-  /** Starts click-to-link if a public URL and the Slack app's OAuth credentials are set. */
+  /** Starts web linking, which needs a public URL and the Slack app's OAuth credentials. */
   private void startWebServer() {
     String publicUrl = this.getSetting("public-url", "SLACK_PUBLIC_URL");
     String clientId = this.getSetting("client-id", "SLACK_CLIENT_ID");
     String clientSecret = this.getSetting("client-secret", "SLACK_CLIENT_SECRET");
     String tokenKey = this.getSetting("token-key", "SLACK_TOKEN_KEY");
 
-    if (publicUrl.isEmpty() && clientId.isEmpty() && clientSecret.isEmpty()) {
-      return;
-    }
     if (publicUrl.isEmpty() || clientId.isEmpty() || clientSecret.isEmpty()) {
-      this.getLogger().warning("Click-to-link needs public-url, client-id and client-secret "
-          + "(or SLACK_PUBLIC_URL, SLACK_CLIENT_ID, SLACK_CLIENT_SECRET); it's off");
+      this.getLogger().severe("Players can't link their Slack accounts until public-url, client-id "
+          + "and client-secret are set (or SLACK_PUBLIC_URL, SLACK_CLIENT_ID, SLACK_CLIENT_SECRET); "
+          + "see the README");
       return;
     }
     if (!publicUrl.startsWith("https://")) {
       this.getLogger().warning("public-url must start with https:// (Slack requires it); "
-          + "click-to-link is off");
+          + "players can't link until it's fixed");
       return;
     }
 
     if (tokenKey.isEmpty()) {
       this.getLogger().warning("No token-key/SLACK_TOKEN_KEY set, so players can't let the bridge "
-          + "post their chat as them; click-to-link will only link accounts");
+          + "post their chat as them; they can still link");
     } else {
       this.tokenCipher = new TokenCipher(tokenKey);
     }
@@ -186,10 +184,10 @@ public class SlackBridgePlugin extends JavaPlugin {
     int port = this.getConfig().getInt("settings.slack-link.web-port", DEFAULT_WEB_PORT);
     try {
       this.webServer = new LinkWebServer(this, publicUrl, port, clientId, clientSecret);
-      this.getLogger().info("Click-to-link is on at " + this.webServer.getPublicUrl()
+      this.getLogger().info("Web linking is on at " + this.webServer.getPublicUrl()
           + "/slack (listening on port " + port + ")");
     } catch (IOException e) {
-      this.getLogger().log(Level.SEVERE, "Could not start the click-to-link web server on port "
+      this.getLogger().log(Level.SEVERE, "Could not start the web linking server on port "
           + port, e);
     }
   }

@@ -5,12 +5,14 @@ import app.jer.slackbridge.SlackBridgePlugin;
 import app.jer.slackbridge.playermessages.SlackMessages;
 import app.jer.slackbridge.slack.SlackBot;
 import app.jer.slackbridge.web.LinkWebServer;
+import app.jer.slackbridge.web.LinkWebServer.LinkAddress;
 import com.slack.api.model.User;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.UUID;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
@@ -55,9 +57,7 @@ public class SlackCommand implements TabExecutor {
         Link link = this.plugin.getLinkStore().getLink(player.getUniqueId());
         String slackId = link == null ? null : link.slackId();
         if (slackId == null) {
-          // unlinked, show slack join + link info
-          sender.sendMessage(SlackMessages.unlinked(bot.getCommandBase(), bot.getSlackName(),
-              bot.getSlackIdHelp()));
+          this.sendLinkPrompt(player);
           return true;
         }
 
@@ -79,42 +79,7 @@ public class SlackCommand implements TabExecutor {
           return true;
         }
 
-        if (args.length == 1) {
-          // Code flow: the player runs /<base-command> link <code> in Slack
-          String code = bot.generateVerificationCode(player.getUniqueId(), player.getName());
-          LinkWebServer web = this.plugin.getLinkWebServer();
-          String url = web == null ? null : web.createLinkUrl(player.getUniqueId(),
-              player.getName(), bot.getLinkCodeExpirationMillis());
-          player.sendMessage(SlackMessages.linkCode(bot.getCommandBase(), bot.getSlackName(), code,
-              bot.getLinkCodeExpirationSeconds(), url));
-          return true;
-        }
-
-        if (args.length != 2) {
-          return false;
-        }
-
-        // Verification flow: the Slack user gets a DM with Verify/Deny buttons
-        String slackId = args[1];
-        this.async(() -> {
-          try {
-            if (bot.getUserInfo(slackId) == null) {
-              player.sendMessage(SlackMessages.invalidSlack());
-              return;
-            }
-
-            boolean sent = bot.sendVerificationMessage(slackId, player.getName(),
-                player.getUniqueId().toString());
-
-            if (sent) {
-              player.sendMessage(SlackMessages.verificationSent());
-            } else {
-              player.sendMessage(SlackMessages.verificationError());
-            }
-          } catch (IOException e) {
-            player.sendMessage(SlackMessages.linkError());
-          }
-        });
+        this.sendLinkPrompt(player);
         return true;
       }
       case "unlink" -> {
@@ -201,6 +166,25 @@ public class SlackCommand implements TabExecutor {
 
     Collections.sort(completions);
     return completions;
+  }
+
+  /** Sends the player their web link, or says linking isn't set up. */
+  private void sendLinkPrompt(Player player) {
+    LinkWebServer web = this.plugin.getLinkWebServer();
+    SlackBot bot = this.plugin.getSlackBot();
+    if (web == null || bot == null) {
+      player.sendMessage(SlackMessages.linkingUnavailable());
+      return;
+    }
+    LinkAddress address = web.createLink(player.getUniqueId(), player.getName(),
+        bot.getLinkCodeExpirationMillis());
+    player.sendMessage(SlackMessages.linkPrompt(address, !isBedrock(player.getUniqueId()),
+        bot.getLinkCodeExpirationMillis()));
+  }
+
+  /** Floodgate gives Bedrock players UUIDs with the top 64 bits zero; their chat can't click links. */
+  static boolean isBedrock(UUID uuid) {
+    return uuid.getMostSignificantBits() == 0;
   }
 
   // Slack API calls are network requests, so keep them off the server thread

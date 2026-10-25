@@ -14,7 +14,6 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.Arrays;
-import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -23,15 +22,19 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.logging.Level;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
- * Click-to-link: a small web server for linking through Slack's OAuth page instead of pasting a
- * code. Players get a one-time link in game; it shows which Minecraft account is being linked,
- * then sends them to Slack, where they can also let the bridge post their chat as them (an
- * optional chat:write user scope they can uncheck). Slack redirects back to /slack/callback.
+ * Web linking, the only way players link their Slack account: a small web server for Slack's OAuth
+ * sign-in. Players get a short address like mc.example.com/slack/482913, short enough to type
+ * where links can't be clicked (the disconnect screen, Bedrock chat). It shows which Minecraft
+ * account is being linked, then sends them to Slack, where they can also let the bridge post their
+ * chat as them (an optional chat:write user scope they can uncheck). Slack redirects back to
+ * /slack/callback.
  *
- * <p>Serves /slack/link, /slack/authorize and /slack/callback; route the public URL's /slack path
- * to this server's port.
+ * <p>Serves /slack/&lt;code&gt;, /slack/authorize and /slack/callback; route the public URL's
+ * /slack path to this server's port.
  */
 public class LinkWebServer {
 
@@ -39,7 +42,27 @@ public class LinkWebServer {
   private static final String IDENTITY_SCOPE = "users:read";
   public static final String POST_AS_USER_SCOPE = "chat:write";
 
+  // Six digits: easy to read off a screen and type, even on a phone or a Bedrock keyboard. Codes
+  // only exist for a few minutes and wrong guesses are rate limited, so this is plenty.
+  private static final int CODE_LENGTH = 6;
+  private static final Pattern CODE_PATH = Pattern.compile("^/slack/([0-9]{%d})/?$"
+      .formatted(CODE_LENGTH));
+  private static final int MAX_MISSES = 20;
+  private static final long MISS_WINDOW_MILLIS = 10 * 60 * 1000;
+
   private record PendingLink(UUID uuid, String name, long expiresAt) {
+
+  }
+
+  private record Misses(int count, long windowStart) {
+
+  }
+
+  /**
+   * @param url      the full address, for a clickable link
+   * @param typeable the same address without "https://", for people who have to type it
+   */
+  public record LinkAddress(String url, String typeable) {
 
   }
 
@@ -50,6 +73,8 @@ public class LinkWebServer {
   private final HttpServer server;
   private final ExecutorService executor;
   private final Map<String, PendingLink> pendingLinks = new ConcurrentHashMap<>();
+  // Wrong or expired codes per visitor, so nobody can try every code
+  private final Map<String, Misses> misses = new ConcurrentHashMap<>();
   private final SecureRandom random = new SecureRandom();
 
   public LinkWebServer(SlackBridgePlugin plugin, String publicUrl, int port, String clientId,
@@ -60,9 +85,7 @@ public class LinkWebServer {
     this.clientSecret = clientSecret;
 
     this.server = HttpServer.create(new InetSocketAddress(port), 0);
-    this.server.createContext("/slack/link", this::handleLink);
-    this.server.createContext("/slack/authorize", this::handleAuthorize);
-    this.server.createContext("/slack/callback", this::handleCallback);
+    this.server.createContext("/slack", this::route);
     this.executor = Executors.newFixedThreadPool(2,
         runnable -> Thread.ofPlatform().name("SlackBridge-web").daemon().unstarted(runnable));
     this.server.setExecutor(this.executor);
@@ -78,22 +101,93 @@ public class LinkWebServer {
     return this.publicUrl;
   }
 
-  /** @return a one-time URL that links the given player when opened, valid for ttlMillis */
-  public String createLinkUrl(UUID uuid, String name, long ttlMillis) {
+  /**
+   * The address that links the given player, valid for ttlMillis. A player keeps the same code
+   * until it expires, so asking again (or rejoining) doesn't break an address they're typing.
+   */
+  public LinkAddress createLink(UUID uuid, String name, long ttlMillis) {
     long now = System.currentTimeMillis();
-    this.pendingLinks.values()
-        .removeIf(pending -> pending.expiresAt() < now || pending.uuid().equals(uuid));
+    this.pendingLinks.values().removeIf(pending -> pending.expiresAt() < now);
 
-    byte[] bytes = new byte[24];
-    this.random.nextBytes(bytes);
-    String state = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
-    this.pendingLinks.put(state, new PendingLink(uuid, name, now + ttlMillis));
-    return this.publicUrl + "/slack/link?state=" + state;
+    String code = this.pendingLinks.entrySet().stream()
+        .filter(entry -> entry.getValue().uuid().equals(uuid)).map(Map.Entry::getKey).findFirst()
+        .orElse(null);
+    if (code == null) {
+      do {
+        code = this.newCode();
+      } while (this.pendingLinks.containsKey(code));
+    }
+    this.pendingLinks.put(code, new PendingLink(uuid, name, now + ttlMillis));
+
+    String url = this.publicUrl + "/slack/" + code;
+    return new LinkAddress(url, url.replaceFirst("^https://", ""));
   }
 
-  private PendingLink getPending(String state) {
-    PendingLink pending = state == null ? null : this.pendingLinks.get(state);
-    return pending == null || pending.expiresAt() < System.currentTimeMillis() ? null : pending;
+  private String newCode() {
+    StringBuilder code = new StringBuilder(CODE_LENGTH);
+    for (int i = 0; i < CODE_LENGTH; i++) {
+      code.append(this.random.nextInt(10));
+    }
+    return code.toString();
+  }
+
+  /**
+   * Looks up a code, answering the request itself (expired, or too many wrong tries) if there's no
+   * usable link.
+   *
+   * @return the pending link, or null if the request has been answered
+   */
+  private PendingLink findPending(HttpExchange exchange, String code) throws IOException {
+    String visitor = visitor(exchange);
+    long now = System.currentTimeMillis();
+    Misses visitorMisses = this.misses.get(visitor);
+    if (visitorMisses != null && now - visitorMisses.windowStart() < MISS_WINDOW_MILLIS
+        && visitorMisses.count() >= MAX_MISSES) {
+      this.respond(exchange, 429, "Too many tries", "<p>Wait a few minutes and try again.</p>");
+      return null;
+    }
+
+    PendingLink pending = code == null ? null : this.pendingLinks.get(code);
+    if (pending != null && pending.expiresAt() >= now) {
+      return pending;
+    }
+
+    if (this.misses.size() > 10_000) {
+      this.misses.values().removeIf(entry -> now - entry.windowStart() >= MISS_WINDOW_MILLIS);
+    }
+    this.misses.merge(visitor, new Misses(1, now), (old, added) ->
+        now - old.windowStart() >= MISS_WINDOW_MILLIS ? added
+            : new Misses(old.count() + 1, old.windowStart()));
+    this.respondExpired(exchange);
+    return null;
+  }
+
+  /**
+   * Who's asking. Behind the ingress every request comes from the proxy, which adds the client's
+   * address as the last X-Forwarded-For entry (earlier entries can be made up by the client).
+   */
+  private static String visitor(HttpExchange exchange) {
+    String forwarded = exchange.getRequestHeaders().getFirst("X-Forwarded-For");
+    if (forwarded != null && !forwarded.isBlank()) {
+      String[] hops = forwarded.split(",");
+      return hops[hops.length - 1].trim();
+    }
+    return exchange.getRemoteAddress().getAddress().getHostAddress();
+  }
+
+  private void route(HttpExchange exchange) throws IOException {
+    String path = exchange.getRequestURI().getPath();
+    Matcher code = CODE_PATH.matcher(path);
+    if (path.equals("/slack/authorize")) {
+      this.handleAuthorize(exchange);
+    } else if (path.equals("/slack/callback")) {
+      this.handleCallback(exchange);
+    } else if (code.matches()) {
+      this.handleLink(exchange, code.group(1));
+    } else {
+      this.respond(exchange, 404, "Not found",
+          "<p>Check the address, or run <code>/slack link</code> in Minecraft for a new one.</p>");
+    }
   }
 
   private boolean canPostAsUser() {
@@ -101,15 +195,13 @@ public class LinkWebServer {
   }
 
   /** Step 1: show which Minecraft account will be linked, so nobody links someone else's by accident */
-  private void handleLink(HttpExchange exchange) throws IOException {
+  private void handleLink(HttpExchange exchange, String state) throws IOException {
     if (!exchange.getRequestMethod().equals("GET")) {
       this.respond(exchange, 405, "Not allowed", "<p>Open this link from Minecraft.</p>");
       return;
     }
-    String state = query(exchange).get("state");
-    PendingLink pending = this.getPending(state);
+    PendingLink pending = this.findPending(exchange, state);
     if (pending == null) {
-      this.respondExpired(exchange);
       return;
     }
 
@@ -134,10 +226,9 @@ public class LinkWebServer {
     }
     String body = new String(exchange.getRequestBody().readNBytes(4096), StandardCharsets.UTF_8);
     String state = parseForm(body).get("state");
-    PendingLink pending = this.getPending(state);
+    PendingLink pending = this.findPending(exchange, state);
     SlackBot bot = this.plugin.getSlackBot();
     if (pending == null) {
-      this.respondExpired(exchange);
       return;
     }
     if (bot == null) {
@@ -161,9 +252,8 @@ public class LinkWebServer {
   private void handleCallback(HttpExchange exchange) throws IOException {
     Map<String, String> query = query(exchange);
     String state = query.get("state");
-    PendingLink pending = this.getPending(state);
+    PendingLink pending = this.findPending(exchange, state);
     if (pending == null) {
-      this.respondExpired(exchange);
       return;
     }
     // One use only

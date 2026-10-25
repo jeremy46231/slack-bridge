@@ -29,9 +29,7 @@ import com.slack.api.model.event.MessageFileShareEvent;
 import com.slack.api.socket_mode.SocketModeClient;
 import io.papermc.paper.event.player.AsyncChatEvent;
 import java.io.IOException;
-import java.security.SecureRandom;
 import java.util.HashSet;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -53,7 +51,6 @@ import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextDecoration;
 import org.bukkit.Bukkit;
-import org.bukkit.OfflinePlayer;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -66,8 +63,6 @@ import org.bukkit.metadata.MetadataValue;
 
 public class SlackBot implements Listener {
 
-  public static final String DEFAULT_SLACK_ID_HELP =
-      "In Slack, open your profile, click the three dots and choose <i>Copy member ID</i>";
   private static final int MAX_NAME_LENGTH = 16;
   private static final long USER_CACHE_MILLIS = 10 * 60 * 1000;
   private static final long CHANNEL_MEMBERS_CACHE_MILLIS = 60 * 1000;
@@ -80,14 +75,6 @@ public class SlackBot implements Listener {
   // <@U123>, <@U123|name>, <#C123|channel>, <!here>, <!subteam^S123|@team>, <https://url|label>
   private static final Pattern SLACK_ENTITY = Pattern.compile("<([@#!]?)([^<>|]+)(?:\\|([^<>]*))?>");
 
-  private record LinkCode(UUID uuid, String name, String code, long expiresAt) {
-
-  }
-
-  private record PendingVerification(String slackId, long expiresAt) {
-
-  }
-
   private record CachedUser(User user, long fetchedAt) {
 
   }
@@ -99,13 +86,10 @@ public class SlackBot implements Listener {
   private final String channelId;
   private final String commandBase;
   private final long linkCodeExpirationMillis;
-  private final Map<UUID, LinkCode> mcLinkCodes = new ConcurrentHashMap<>();
-  private final Map<UUID, PendingVerification> pendingVerifications = new ConcurrentHashMap<>();
   private final Map<String, CachedUser> userCache = new ConcurrentHashMap<>();
   private volatile Set<String> channelMembers = Set.of();
   private long channelMembersFetchedAt = 0;
   private volatile String channelName;
-  private final SecureRandom random = new SecureRandom();
   // Posts to Slack in order without blocking the server thread
   private final ExecutorService outbox = Executors.newSingleThreadExecutor(
       runnable -> Thread.ofPlatform().name("SlackBridge-outbox").daemon().unstarted(runnable));
@@ -160,28 +144,6 @@ public class SlackBot implements Listener {
     app.event(MessageDeletedEvent.class, (payload, ctx) -> ctx.ack());
     app.event(MessageChannelJoinEvent.class, (payload, ctx) -> ctx.ack());
 
-    app.blockAction("verify-link", (req, ctx) -> {
-      String clickerId = req.getPayload().getUser().getId();
-      UUID mcUuid = UUID.fromString(req.getPayload().getActions().get(0).getValue());
-      PendingVerification pending = this.pendingVerifications.get(mcUuid);
-
-      if (pending == null || pending.expiresAt() < System.currentTimeMillis()
-          || !pending.slackId().equals(clickerId)) {
-        ctx.respond(r -> r.replaceOriginal(true).text(
-            "This link request has expired. Run `/slack link` in Minecraft to start again."));
-        return ctx.ack();
-      }
-
-      this.pendingVerifications.remove(mcUuid);
-      OfflinePlayer player = Bukkit.getOfflinePlayer(mcUuid);
-      this.plugin.link(mcUuid, clickerId, player.getName());
-      ctx.respond(r -> r.replaceOriginal(true)
-          .text("Your Slack account is now linked to *%s*.".formatted(escape(player.getName()))));
-      this.sendToPlayer(mcUuid, SlackMessages.accountLinked());
-
-      return ctx.ack();
-    });
-
     app.blockAction("undo-link", (req, ctx) -> {
       String clickerId = req.getPayload().getUser().getId();
       UUID mcUuid = UUID.fromString(req.getPayload().getActions().get(0).getValue());
@@ -204,14 +166,6 @@ public class SlackBot implements Listener {
       return ctx.ack();
     });
 
-    app.blockAction("deny-link", (req, ctx) -> {
-      UUID mcUuid = UUID.fromString(req.getPayload().getActions().get(0).getValue());
-      this.pendingVerifications.remove(mcUuid);
-      ctx.respond(r -> r.replaceOriginal(true).text("OK, nothing was linked."));
-      this.sendToPlayer(mcUuid, SlackMessages.linkDenied());
-      return ctx.ack();
-    });
-
     app.command("/%s".formatted(commandBase), (req, ctx) -> {
       String text = req.getPayload().getText() == null ? "" : req.getPayload().getText().trim();
       String userId = req.getPayload().getUserId();
@@ -224,16 +178,17 @@ public class SlackBot implements Listener {
 
       String[] args = text.split("\\s+", 2);
       String argument = args.length > 1 ? args[1].trim() : "";
+      // Every reply is ephemeral: only the person who ran the command sees it, and Slack doesn't post
+      // the command itself to the channel (where the bridge would relay it into the game)
       return switch (args[0].toLowerCase()) {
-        case "players" -> ctx.ack(r -> r.responseType("in_channel").text(this.getPlayerList()));
-        case "link" -> ctx.ack(argument.isEmpty() ? "Missing argument: link code" : this.linkWithCode(argument, userId));
+        case "players" -> ctx.ack(this.getPlayerList());
         case "lookup" -> ctx.ack(argument.isEmpty() ? "Missing argument: slack user mention or id"
             : this.lookup(argument));
         default -> ctx.ack("""
             Possible commands:
             `/%1$s players`: list who is online
-            `/%1$s link <code>`: link your Minecraft account using the code shown in game
-            `/%1$s lookup <@user | player>`: see which accounts are linked""".formatted(commandBase));
+            `/%1$s lookup <@user | player>`: see which accounts are linked
+            To link your Minecraft account, run `/slack link` in Minecraft.""".formatted(commandBase));
       };
     });
 
@@ -289,7 +244,7 @@ public class SlackBot implements Listener {
   }
 
   /**
-   * Finishes a click-to-link sign-in. With postsAsUser, the player's chat will be posted with their
+   * Finishes a web linking sign-in. With postsAsUser, the player's chat will be posted with their
    * own token; otherwise the token was only needed to learn who they are, so it's revoked.
    */
   public void completeOAuthLink(UUID uuid, String name, String slackId, String userToken,
@@ -311,19 +266,16 @@ public class SlackBot implements Listener {
     this.plugin.getLogger().info("%s linked to Slack user %s through Slack sign-in%s".formatted(
         name, slackId, keepToken ? ", posting chat as them" : ""));
     this.sendToPlayer(uuid, SlackMessages.accountLinked());
-    this.sendLinkedNotice(uuid, name, slackId, keepToken);
+    this.sendLinkedNotice(uuid, name, slackId);
   }
 
   /**
    * DMs the Slack user which Minecraft account they just linked, with a button to undo it. A
-   * click-to-link URL can be passed to someone else, and this is where they'd notice.
+   * link address can be passed to someone else, and this is where they'd notice.
    */
-  private void sendLinkedNotice(UUID uuid, String name, String slackId, boolean postsAsUser) {
-    String notice = ("Your Slack account was just linked to the Minecraft account *%s*. %s"
-        + " If this wasn't you, unlink it now.").formatted(escape(name), postsAsUser
-        ? "Anything that player types in Minecraft chat will be posted as you in <#%s>."
-            .formatted(this.channelId)
-        : "That player's Minecraft chat will be posted under your Slack name and photo.");
+  private void sendLinkedNotice(UUID uuid, String name, String slackId) {
+    String notice = "Your Slack account was just linked to the Minecraft account *%s*."
+        .formatted(escape(name));
 
     this.enqueue(() -> {
       try {
@@ -376,17 +328,6 @@ public class SlackBot implements Listener {
   public String getSlackName() {
     String name = this.plugin.getConfig().getString("settings.slack-link.slack-name", "Slack");
     return name == null || name.isBlank() ? "Slack" : name;
-  }
-
-  /** MiniMessage text explaining how to find your Slack member ID. */
-  public String getSlackIdHelp() {
-    String help = this.plugin.getConfig()
-        .getString("settings.slack-link.slack-id-help", DEFAULT_SLACK_ID_HELP);
-    return help == null || help.isBlank() ? DEFAULT_SLACK_ID_HELP : help;
-  }
-
-  public int getLinkCodeExpirationSeconds() {
-    return (int) (this.linkCodeExpirationMillis / 1000);
   }
 
   @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -621,76 +562,6 @@ public class SlackBot implements Listener {
     } catch (SlackApiException e) {
       return null;
     }
-  }
-
-  public boolean sendVerificationMessage(String id, String mcName, String uuid) throws IOException {
-    MethodsClient client = app.client();
-
-    try {
-      String question = "Someone on the Minecraft server is trying to link the account *%s* to your Slack account. Is this you?"
-          .formatted(escape(mcName));
-      var res = client.chatPostMessage(r -> r.token(this.botToken).channel(id).text(question)
-          .blocks(asBlocks(section(s -> s.text(markdownText(question))), actions(
-              actions -> actions.elements(asElements(button(b -> b.actionId("verify-link").text(
-                  com.slack.api.model.block.composition.BlockCompositions.plainText(
-                      pt -> pt.text("Yes, link it"))).value(uuid).style("primary")), button(
-                  b -> b.actionId("deny-link").text(
-                      com.slack.api.model.block.composition.BlockCompositions.plainText(
-                          pt -> pt.text("No"))).value(uuid))))))));
-
-      if (!res.isOk()) {
-        this.plugin.getLogger()
-            .log(Level.WARNING, "SlackBot failed to send verification message: " + res.getError());
-        return false;
-      }
-
-      this.pendingVerifications.put(UUID.fromString(uuid),
-          new PendingVerification(id, System.currentTimeMillis() + this.linkCodeExpirationMillis));
-      return true;
-    } catch (SlackApiException e) {
-      this.plugin.getLogger().log(Level.WARNING, "SlackBot failed to send verification message", e);
-      return false;
-    }
-  }
-
-  public String generateVerificationCode(UUID mcUuid, String name) {
-    long expiresAt = System.currentTimeMillis() + this.linkCodeExpirationMillis;
-    LinkCode existing = this.mcLinkCodes.get(mcUuid);
-    // refresh the time to live of the code
-    String code = existing != null && existing.expiresAt() > System.currentTimeMillis()
-        ? existing.code() : this.newCode();
-    this.mcLinkCodes.put(mcUuid, new LinkCode(mcUuid, name, code, expiresAt));
-    return code;
-  }
-
-  private String newCode() {
-    byte[] bytes = new byte[3];
-    this.random.nextBytes(bytes);
-    return HexFormat.of().formatHex(bytes);
-  }
-
-  private String linkWithCode(String code, String slackId) {
-    long now = System.currentTimeMillis();
-    this.mcLinkCodes.values().removeIf(linkCode -> linkCode.expiresAt() < now);
-    Optional<LinkCode> match = this.mcLinkCodes.values().stream()
-        .filter(linkCode -> linkCode.code().equalsIgnoreCase(code)).findFirst();
-
-    if (match.isEmpty()) {
-      return "Invalid or expired code. Run `/slack link` in Minecraft (or try joining again) to get a new one.";
-    }
-
-    LinkCode linkCode = match.get();
-    String existing = this.plugin.getLinkStore().getSlackId(linkCode.uuid());
-    if (existing != null) {
-      return "This Minecraft account is already linked to <@%s>".formatted(existing);
-    }
-
-    this.plugin.link(linkCode.uuid(), slackId, linkCode.name());
-    this.mcLinkCodes.remove(linkCode.uuid());
-    this.sendToPlayer(linkCode.uuid(), SlackMessages.accountLinked());
-
-    return "Successfully linked your Slack account to the Minecraft account *%s*! You may now join the server.".formatted(
-        escape(linkCode.name()));
   }
 
   private String lookup(String query) {

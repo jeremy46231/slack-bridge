@@ -4,6 +4,8 @@ import app.jer.slackbridge.SlackBridgePlugin;
 import app.jer.slackbridge.playermessages.SlackMessages;
 import app.jer.slackbridge.slack.SlackBot;
 import app.jer.slackbridge.slack.SlackBot.JoinCheck;
+import app.jer.slackbridge.web.LinkWebServer;
+import app.jer.slackbridge.web.LinkWebServer.LinkAddress;
 import java.util.UUID;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -48,10 +50,16 @@ public class LinkRequirementListener implements Listener {
       // Check for slack link
       this.plugin.getLogger()
           .info("Preventing " + event.getName() + "'s join because they are not linked");
-      String code = bot.generateVerificationCode(playerUUID, event.getName());
+      LinkWebServer web = this.plugin.getLinkWebServer();
+      if (web == null) {
+        event.disallow(Result.KICK_WHITELIST, SlackMessages.linkingUnavailable());
+        return;
+      }
+      // Disconnect screens can't be clicked, so this shows an address short enough to type
+      LinkAddress address = web.createLink(playerUUID, event.getName(),
+          bot.getLinkCodeExpirationMillis());
       event.disallow(Result.KICK_WHITELIST,
-          SlackMessages.mustLink(bot.getCommandBase(), bot.getSlackName(), code,
-              bot.getLinkCodeExpirationSeconds()));
+          SlackMessages.mustLink(address, bot.getLinkCodeExpirationMillis()));
     } else if (check == JoinCheck.NOT_IN_CHANNEL) {
       this.plugin.getLogger().info("Preventing " + event.getName()
           + "'s join because their Slack account is not in the bridge channel");

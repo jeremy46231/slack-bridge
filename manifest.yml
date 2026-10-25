@@ -5,10 +5,9 @@
 # to a name that is unique in the workspace. Set the same command name (without "/") as
 # base-command in plugins/SlackBridge/config.yml or as the SLACK_COMMAND environment variable.
 #
-# Click-to-link (optional): replace the redirect URL with <your public-url>/slack/callback. The user
-# scopes are what players are asked for when they link: users:read tells the plugin who they are,
-# and chat:write (optional, players can uncheck it) lets their Minecraft chat post as them. Without
-# click-to-link, delete redirect_urls and the user scopes.
+# Web linking: replace the redirect URL with <your public-url>/slack/callback. The user scopes are
+# what players are asked for when they link: users:read tells the plugin who they are, and
+# chat:write (optional, players can uncheck it) lets their Minecraft chat post as them.
 display_information:
   name: Minecraft
   description: Bridges chat between a Minecraft server and Slack
@@ -23,7 +22,7 @@ features:
   slash_commands:
     - command: /mc
       description: Talk to the Minecraft server
-      usage_hint: "players | link <code> | lookup <@user or player>"
+      usage_hint: "players | lookup <@user or player>"
       should_escape: true
 oauth_config:
   scopes:

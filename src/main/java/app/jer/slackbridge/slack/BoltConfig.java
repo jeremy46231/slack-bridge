@@ -13,7 +13,7 @@ public final class BoltConfig {
    *
    * <p>Bolt fills unset fields from SLACK_* environment variables, and treats any app with both a
    * client ID and secret as a multi-workspace OAuth app that looks up installations instead of
-   * using the bot token. Click-to-link uses SLACK_CLIENT_ID and SLACK_CLIENT_SECRET for its own
+   * using the bot token. Web linking uses SLACK_CLIENT_ID and SLACK_CLIENT_SECRET for its own
    * OAuth flow, so the OAuth fields are cleared here to keep Bolt out of that mode.
    */
   public static AppConfig singleWorkspace(String botToken) {

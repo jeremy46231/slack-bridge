@@ -10,6 +10,7 @@ import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextDecoration;
 import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
+import app.jer.slackbridge.web.LinkWebServer.LinkAddress;
 import org.bukkit.entity.Player;
 
 /**
@@ -28,16 +29,16 @@ public final class SlackMessages {
             Placeholder.component("message", message)));
   }
 
-  public static Component mustLink(String baseCommand, String slackName, String code, int seconds) {
+  /** The disconnect screen for an unlinked player; it can't be clicked, so the address is typed. */
+  public static Component mustLink(LinkAddress address, long ttlMillis) {
     return miniMessage().deserialize("""
-            <b><red>You must link your Slack account to join the server!</red></b>
-            Please run <gold>/<basecommand> link <code></gold> in <slackname> to link your account.
+            <b><red>Link your Slack account to join</red></b>
 
-            <i>This code expires in <seconds> seconds.</i>""",
-        TagResolver.resolver(Placeholder.unparsed("basecommand", baseCommand),
-            Placeholder.unparsed("slackname", slackName),
-            Placeholder.unparsed("code", code),
-            Placeholder.unparsed("seconds", String.valueOf(seconds))));
+            Go to <gold><address></gold>
+
+            <gray>Expires in <minutes>.</gray>""",
+        TagResolver.resolver(Placeholder.unparsed("address", address.typeable()),
+            Placeholder.unparsed("minutes", minutes(ttlMillis))));
   }
 
   public static Component mustBeInChannel(String channelName, String slackName) {
@@ -54,49 +55,31 @@ public final class SlackMessages {
         Try again in a minute. If this keeps happening, please let a server admin know.</red>""");
   }
 
-  /** @param linkUrl a click-to-link URL, or null if click-to-link is off */
-  public static Component linkCode(String baseCommand, String slackName, String code, int seconds,
-      String linkUrl) {
-    // MiniMessage doesn't fill placeholders into click arguments, so the clickable parts are built here
-    String command = "/%s link %s".formatted(baseCommand, code);
-    Component copyable = text().append(text(command, NamedTextColor.GOLD))
-        .append(text(" (click to copy)", NamedTextColor.GRAY))
-        .clickEvent(ClickEvent.copyToClipboard(command)).hoverEvent(text("Click to copy")).build();
-    TagResolver resolver = TagResolver.resolver(Placeholder.component("command", copyable),
-        Placeholder.unparsed("slackname", slackName),
-        Placeholder.unparsed("seconds", String.valueOf(seconds)));
-
-    if (linkUrl == null) {
-      return miniMessage().deserialize("""
-              <green>Run this in <slackname> to link your account:</green>
-              <command>
-              <i>This code expires in <seconds> seconds.</i>""", resolver);
+  /** @param clickable false for Bedrock players, whose chat can't open links */
+  public static Component linkPrompt(LinkAddress address, boolean clickable, long ttlMillis) {
+    // MiniMessage doesn't fill placeholders into click arguments, so the link is built here
+    Component link = text(address.typeable(), NamedTextColor.GOLD);
+    if (clickable) {
+      link = text().append(link.decorate(TextDecoration.UNDERLINED))
+          .append(text(" (click to open)", NamedTextColor.GRAY))
+          .clickEvent(ClickEvent.openUrl(address.url())).hoverEvent(text("Open in your browser"))
+          .build();
     }
-
-    Component link = text().append(text("Click here to link your Slack account", NamedTextColor.GREEN,
-            TextDecoration.UNDERLINED))
-        .append(text(" (opens your browser)", NamedTextColor.GRAY))
-        .clickEvent(ClickEvent.openUrl(linkUrl)).hoverEvent(text(linkUrl)).build();
     return miniMessage().deserialize("""
-            <link>
-            <gray>Or run this in <slackname>:</gray> <command>
-            <i>This expires in <seconds> seconds.</i>""",
-        TagResolver.resolver(resolver, Placeholder.component("link", link)));
+            <green>Link your Slack account:</green> <link>
+            <gray>Expires in <minutes>.</gray>""",
+        TagResolver.resolver(Placeholder.component("link", link),
+            Placeholder.unparsed("minutes", minutes(ttlMillis))));
   }
 
-  /**
-   * @param slackIdHelp MiniMessage text from the config explaining how to find a Slack member ID
-   */
-  public static Component unlinked(String baseCommand, String slackName, String slackIdHelp) {
-    return miniMessage().deserialize("""
-            <b><red>Link your Minecraft account with <slackname></red></b>
-            <gold><b>Either:</b></gold> run <click:run_command:'/slack link'><hover:show_text:'Click to run'><green>/slack link</green> <gray>(click to run)</gray></hover></click> and follow what it says
-            <gold><b>Or:</b></gold> run <click:suggest_command:'/slack link '><hover:show_text:'Click to fill in'><green>/slack link <your slack member id></green> <gray>(click to fill in)</gray></hover></click>
-               <idhelp>""",
-        TagResolver.resolver(Placeholder.unparsed("basecommand", baseCommand),
-            Placeholder.unparsed("slackname", slackName),
-            Placeholder.parsed("idhelp", slackIdHelp),
-            Placeholder.unparsed("code", "<code>")));
+  public static Component linkingUnavailable() {
+    return miniMessage().deserialize(
+        "<red>Slack linking isn't set up on this server yet. Ask a server admin.</red>");
+  }
+
+  private static String minutes(long millis) {
+    long minutes = Math.max(1, (millis + 59_999) / 60_000);
+    return minutes == 1 ? "1 minute" : minutes + " minutes";
   }
 
   public static Component linked(Player player, User linkedSlackUser, boolean postsAsUser) {
@@ -154,14 +137,6 @@ public final class SlackMessages {
     return miniMessage().deserialize("<red>Couldn't find a Slack user with that ID. Member IDs start with U.</red>");
   }
 
-  public static Component linkDenied() {
-    return miniMessage().deserialize("<red>The request to link the account was denied.</red>");
-  }
-
-  public static Component linkError() {
-    return miniMessage().deserialize("<red>An error occurred while linking your account.</red>");
-  }
-
   public static Component lookupError() {
     return miniMessage().deserialize(
         "<red>There was an error while looking up that player.</red>");
@@ -178,16 +153,6 @@ public final class SlackMessages {
 
   public static Component slackDisabled() {
     return miniMessage().deserialize("<red>Slack integration is not running.</red>");
-  }
-
-  public static Component verificationError() {
-    return miniMessage().deserialize(
-        "<red>An error occurred while sending the verification message.</red>");
-  }
-
-  public static Component verificationSent() {
-    return miniMessage().deserialize(
-        "<green>A verification message has been sent to your Slack account.</green>");
   }
 
   public static Component noPermission() {
@@ -241,7 +206,7 @@ public final class SlackMessages {
             Channel: <channel>
             Slash command: <command>
             Join requirement: <joinrequirement>
-            Click-to-link: <clicktolink>
+            Web linking: <clicktolink>
             Linked accounts: <links> (<postingasthemselves> posting as themselves)""",
         TagResolver.resolver(Placeholder.unparsed("connection", connection),
             Placeholder.unparsed("channel", channel.isEmpty() ? "(not set)" : channel),

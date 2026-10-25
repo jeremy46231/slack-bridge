@@ -8,7 +8,7 @@ settings:
     #   channel - linked players whose Slack account is also a member of channel-id
     # Server operators always bypass this, and Minecraft's whitelist still applies on top of it.
     join-requirement: "none"
-    # Time in seconds after which the code will expire
+    # Time in seconds a player's link address works
     link-code-expiration: 600
     # The Slack bot token (xoxb-...). Leave empty to read the SLACK_BOT_TOKEN environment variable.
     bot-token: ""
@@ -24,20 +24,17 @@ settings:
     base-command: ""
     # What in-game messages call the Slack workspace, e.g. "the Hack Club Slack"
     slack-name: "Slack"
-    # Shown in /slack info to explain how to find your Slack member ID (MiniMessage format), e.g.
-    # "Run <gold>/id</gold> in Slack to see it" in the Hack Club Slack
-    slack-id-help: "In Slack, open your profile, click the three dots and choose <i>Copy member ID</i>"
-    # Click-to-link: players link by clicking a link and signing in to Slack, and can let their chat
-    # post as real messages from their Slack account. Needs all three of these (or the
-    # SLACK_PUBLIC_URL, SLACK_CLIENT_ID and SLACK_CLIENT_SECRET environment variables). Leave them
-    # empty to keep linking with codes only.
+    # Web linking, the only way players link: they open a short address like
+    # mc.example.com/slack/482913, sign in to Slack, and can let their chat post as real messages
+    # from their Slack account. Needs all three of these (or the SLACK_PUBLIC_URL, SLACK_CLIENT_ID
+    # and SLACK_CLIENT_SECRET environment variables); without them, nobody can link.
     # The HTTPS address that reaches this server's web-port, without a trailing slash; its /slack
     # path must be routed to web-port. Slack redirects players back to <public-url>/slack/callback.
     public-url: ""
     # The Slack app's Client ID and Client Secret (Basic Information > App Credentials)
     client-id: ""
     client-secret: ""
-    # Port the built-in click-to-link web server listens on
+    # Port the built-in web linking server listens on
     web-port: 8101
     # Any long random string, used to encrypt the Slack tokens of players who let their chat post as
     # them (stored in links.yml). Leave empty to read SLACK_TOKEN_KEY; if neither is set, players

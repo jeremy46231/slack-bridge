@@ -145,7 +145,7 @@ public class AdminCommand {
           sender.sendMessage(SlackMessages.adminStatus(connection, channel,
               command.isEmpty() ? "(not set)" : "/" + command.replaceFirst("^/", ""),
               this.plugin.getJoinRequirement().name().toLowerCase(Locale.ROOT),
-              web == null ? "off" : web.getPublicUrl() + "/slack"
+              web == null ? "not set up, players can't link" : web.getPublicUrl() + "/slack"
                   + (this.plugin.getTokenCipher() == null ? " (linking only)" : ""),
               links.size(),
               (int) links.values().stream().filter(link -> link.userToken() != null).count()));
