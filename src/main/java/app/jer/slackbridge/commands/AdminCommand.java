@@ -4,6 +4,7 @@ import app.jer.slackbridge.LinkStore.Link;
 import app.jer.slackbridge.SlackBridgePlugin;
 import app.jer.slackbridge.playermessages.SlackMessages;
 import app.jer.slackbridge.slack.SlackBot;
+import app.jer.slackbridge.web.LinkWebServer;
 import com.destroystokyo.paper.profile.PlayerProfile;
 import com.slack.api.model.User;
 import java.io.IOException;
@@ -76,7 +77,7 @@ public class AdminCommand {
             return;
           }
 
-          this.plugin.getLinkStore().setLink(target.uuid(), slackUser.getId(), target.name());
+          this.plugin.link(target.uuid(), slackUser.getId(), target.name());
           this.plugin.getLogger().info("%s linked %s to Slack user %s".formatted(sender.getName(),
               target.name(), slackUser.getId()));
           sender.sendMessage(SlackMessages.adminLinked(displayName(target),
@@ -95,7 +96,7 @@ public class AdminCommand {
         }
         this.async(() -> {
           Target target = this.resolve(args[1]);
-          if (target == null || !this.plugin.getLinkStore().removeLink(target.uuid())) {
+          if (target == null || !this.plugin.unlink(target.uuid())) {
             sender.sendMessage(SlackMessages.playerNotLinked());
             return;
           }
@@ -125,7 +126,7 @@ public class AdminCommand {
                 }
                 sender.sendMessage(SlackMessages.adminListEntry(
                     link.name() != null ? link.name() : entry.getKey().toString(), link.slackId(),
-                    slackName));
+                    slackName, link.userToken() != null));
               });
         });
         return true;
@@ -133,6 +134,8 @@ public class AdminCommand {
       case "status" -> {
         this.async(() -> {
           SlackBot bot = this.plugin.getSlackBot();
+          LinkWebServer web = this.plugin.getLinkWebServer();
+          Map<UUID, Link> links = this.plugin.getLinkStore().getLinks();
           boolean enabled = this.plugin.getConfig().getBoolean("settings.slack-link.enabled", false);
           String connection = bot != null ? "connected" : enabled ? "not connected" : "disabled";
           String channel = bot == null ? this.plugin.getSetting("channel-id", "SLACK_CHANNEL_ID")
@@ -142,7 +145,10 @@ public class AdminCommand {
           sender.sendMessage(SlackMessages.adminStatus(connection, channel,
               command.isEmpty() ? "(not set)" : "/" + command.replaceFirst("^/", ""),
               this.plugin.getJoinRequirement().name().toLowerCase(Locale.ROOT),
-              this.plugin.getLinkStore().getLinks().size()));
+              web == null ? "off" : web.getPublicUrl() + "/slack"
+                  + (this.plugin.getTokenCipher() == null ? " (linking only)" : ""),
+              links.size(),
+              (int) links.values().stream().filter(link -> link.userToken() != null).count()));
         });
         return true;
       }

@@ -4,6 +4,11 @@
 # One Slack app per server. Before creating it, rename the app and bot, and change the slash command
 # to a name that is unique in the workspace. Set the same command name (without "/") as
 # base-command in plugins/SlackBridge/config.yml or as the SLACK_COMMAND environment variable.
+#
+# Click-to-link (optional): replace the redirect URL with <your public-url>/slack/callback. The user
+# scopes are what players are asked for when they link: users:read tells the plugin who they are,
+# and chat:write (optional, players can uncheck it) lets their Minecraft chat post as them. Without
+# click-to-link, delete redirect_urls and the user scopes.
 display_information:
   name: Minecraft
   description: Bridges chat between a Minecraft server and Slack
@@ -32,6 +37,13 @@ oauth_config:
       - commands
       - im:write
       - users:read
+    user:
+      - users:read
+      - chat:write
+    user_optional:
+      - chat:write
+  redirect_urls:
+    - https://example.com/slack/callback
 settings:
   event_subscriptions:
     bot_events:

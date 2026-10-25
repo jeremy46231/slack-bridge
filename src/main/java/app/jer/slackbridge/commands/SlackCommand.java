@@ -1,8 +1,10 @@
 package app.jer.slackbridge.commands;
 
+import app.jer.slackbridge.LinkStore.Link;
 import app.jer.slackbridge.SlackBridgePlugin;
 import app.jer.slackbridge.playermessages.SlackMessages;
 import app.jer.slackbridge.slack.SlackBot;
+import app.jer.slackbridge.web.LinkWebServer;
 import com.slack.api.model.User;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -50,7 +52,8 @@ public class SlackCommand implements TabExecutor {
           sender.sendMessage(SlackMessages.mustBePlayer());
           return true;
         }
-        String slackId = this.plugin.getLinkStore().getSlackId(player.getUniqueId());
+        Link link = this.plugin.getLinkStore().getLink(player.getUniqueId());
+        String slackId = link == null ? null : link.slackId();
         if (slackId == null) {
           // unlinked, show slack join + link info
           sender.sendMessage(SlackMessages.unlinked(bot.getCommandBase(), bot.getSlackName(),
@@ -66,7 +69,7 @@ public class SlackCommand implements TabExecutor {
           } catch (IOException e) {
             slackUser = null;
           }
-          player.sendMessage(SlackMessages.linked(player, slackUser));
+          player.sendMessage(SlackMessages.linked(player, slackUser, link.userToken() != null));
         });
         return true;
       }
@@ -79,8 +82,11 @@ public class SlackCommand implements TabExecutor {
         if (args.length == 1) {
           // Code flow: the player runs /<base-command> link <code> in Slack
           String code = bot.generateVerificationCode(player.getUniqueId(), player.getName());
+          LinkWebServer web = this.plugin.getLinkWebServer();
+          String url = web == null ? null : web.createLinkUrl(player.getUniqueId(),
+              player.getName(), bot.getLinkCodeExpirationMillis());
           player.sendMessage(SlackMessages.linkCode(bot.getCommandBase(), bot.getSlackName(), code,
-              bot.getLinkCodeExpirationSeconds()));
+              bot.getLinkCodeExpirationSeconds(), url));
           return true;
         }
 
@@ -116,7 +122,7 @@ public class SlackCommand implements TabExecutor {
           sender.sendMessage(SlackMessages.mustBePlayer());
           return true;
         }
-        if (this.plugin.getLinkStore().removeLink(player.getUniqueId())) {
+        if (this.plugin.unlink(player.getUniqueId())) {
           player.sendMessage(SlackMessages.accountUnlinked());
         } else {
           player.sendMessage(SlackMessages.notLinkedSelf());

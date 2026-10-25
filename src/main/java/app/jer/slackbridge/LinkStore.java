@@ -2,6 +2,8 @@ package app.jer.slackbridge;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Optional;
@@ -17,7 +19,11 @@ import org.bukkit.configuration.file.YamlConfiguration;
  */
 public class LinkStore {
 
-  public record Link(String slackId, String name) {
+  /**
+   * @param userToken the player's Slack user token, encrypted with {@link TokenCipher}, if they let
+   *                  the bridge post as them; otherwise null
+   */
+  public record Link(String slackId, String name, String userToken) {
 
   }
 
@@ -46,7 +52,8 @@ public class LinkStore {
       try {
         String slackId = section.getString(key + ".slack-id");
         if (slackId != null) {
-          this.links.put(UUID.fromString(key), new Link(slackId, section.getString(key + ".name")));
+          this.links.put(UUID.fromString(key), new Link(slackId, section.getString(key + ".name"),
+              section.getString(key + ".user-token")));
         }
       } catch (IllegalArgumentException exception) {
         this.plugin.getLogger().log(Level.WARNING, "Ignoring link with an invalid UUID: " + key);
@@ -60,11 +67,18 @@ public class LinkStore {
       String path = "links." + entry.getKey();
       yaml.set(path + ".slack-id", entry.getValue().slackId());
       yaml.set(path + ".name", entry.getValue().name());
+      yaml.set(path + ".user-token", entry.getValue().userToken());
     }
 
     try {
       this.file.getParentFile().mkdirs();
       yaml.save(this.file);
+      // Holds (encrypted) Slack tokens, so keep it to the server's own user where possible
+      try {
+        Files.setPosixFilePermissions(this.file.toPath(), PosixFilePermissions.fromString("rw-------"));
+      } catch (UnsupportedOperationException ignored) {
+        // Not a POSIX file system
+      }
     } catch (IOException e) {
       this.plugin.getLogger().log(Level.SEVERE, "Could not save " + this.file, e);
     }
@@ -74,19 +88,46 @@ public class LinkStore {
     return Map.copyOf(this.links);
   }
 
+  public Link getLink(UUID uuid) {
+    return this.links.get(uuid);
+  }
+
   public String getSlackId(UUID uuid) {
     Link link = this.links.get(uuid);
     return link == null ? null : link.slackId();
   }
 
-  public void setLink(UUID uuid, String slackId, String name) {
-    this.links.put(uuid, new Link(slackId, name));
-    this.save();
+  /**
+   * Links a player without changing whether they post as themselves: their user token is kept if
+   * they're relinked to the same Slack account and dropped otherwise.
+   *
+   * @return the link this replaced, or null
+   */
+  public Link setLink(UUID uuid, String slackId, String name) {
+    Link old = this.links.get(uuid);
+    String userToken = old != null && old.slackId().equals(slackId) ? old.userToken() : null;
+    return this.setLink(uuid, slackId, name, userToken);
   }
 
-  public boolean removeLink(UUID uuid) {
-    boolean removed = this.links.remove(uuid) != null;
-    if (removed) {
+  /** @return the link this replaced, or null */
+  public Link setLink(UUID uuid, String slackId, String name, String userToken) {
+    Link old = this.links.put(uuid, new Link(slackId, name, userToken));
+    this.save();
+    return old;
+  }
+
+  /** Stops a player posting as themselves, if they're still linked to the same Slack account. */
+  public void clearUserToken(UUID uuid, String slackId) {
+    Link link = this.links.get(uuid);
+    if (link != null && link.slackId().equals(slackId) && link.userToken() != null) {
+      this.setLink(uuid, slackId, link.name(), null);
+    }
+  }
+
+  /** @return the removed link, or null if there was none */
+  public Link removeLink(UUID uuid) {
+    Link removed = this.links.remove(uuid);
+    if (removed != null) {
       this.save();
     }
     return removed;
@@ -96,7 +137,7 @@ public class LinkStore {
   public void updateName(UUID uuid, String name) {
     Link link = this.links.get(uuid);
     if (link != null && !name.equals(link.name())) {
-      this.setLink(uuid, link.slackId(), name);
+      this.setLink(uuid, link.slackId(), name, link.userToken());
     }
   }
 

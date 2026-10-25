@@ -26,7 +26,24 @@ settings:
     slack-name: "Slack"
     # Shown in /slack info to explain how to find your Slack member ID (MiniMessage format), e.g.
     # "Run <gold>/id</gold> in Slack to see it" in the Hack Club Slack
-    slack-id-help: "In Slack, open your profile, click <b>⋮</b> and choose <i>Copy member ID</i>"
+    slack-id-help: "In Slack, open your profile, click the three dots and choose <i>Copy member ID</i>"
+    # Click-to-link: players link by clicking a link and signing in to Slack, and can let their chat
+    # post as real messages from their Slack account. Needs all three of these (or the
+    # SLACK_PUBLIC_URL, SLACK_CLIENT_ID and SLACK_CLIENT_SECRET environment variables). Leave them
+    # empty to keep linking with codes only.
+    # The HTTPS address that reaches this server's web-port, without a trailing slash; its /slack
+    # path must be routed to web-port. Slack redirects players back to <public-url>/slack/callback.
+    public-url: ""
+    # The Slack app's Client ID and Client Secret (Basic Information > App Credentials)
+    client-id: ""
+    client-secret: ""
+    # Port the built-in click-to-link web server listens on
+    web-port: 8101
+    # Any long random string, used to encrypt the Slack tokens of players who let their chat post as
+    # them (stored in links.yml). Leave empty to read SLACK_TOKEN_KEY; if neither is set, players
+    # can only link, not post as themselves. Changing it stops everyone posting as themselves until
+    # they link again.
+    token-key: ""
     # Avatar for chat from players without a linked Slack account (linked players post with their
     # Slack profile picture). {uuid} and {name} are replaced.
     avatar-url: "https://mc-heads.net/avatar/{uuid}/128"

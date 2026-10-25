@@ -2,8 +2,12 @@ package app.jer.slackbridge;
 
 import app.jer.slackbridge.commands.SlackCommand;
 import app.jer.slackbridge.listeners.LinkRequirementListener;
+import app.jer.slackbridge.LinkStore.Link;
 import app.jer.slackbridge.slack.SlackBot;
+import app.jer.slackbridge.web.LinkWebServer;
+import java.io.IOException;
 import java.util.Locale;
+import java.util.UUID;
 import java.util.logging.Level;
 import org.bukkit.command.PluginCommand;
 import org.bukkit.plugin.IllegalPluginAccessException;
@@ -18,7 +22,11 @@ public class SlackBridgePlugin extends JavaPlugin {
 
   public enum JoinRequirement { NONE, LINKED, CHANNEL }
 
+  private static final int DEFAULT_WEB_PORT = 8101;
+
   private LinkStore linkStore;
+  private TokenCipher tokenCipher;
+  private LinkWebServer webServer;
   private JoinRequirement joinRequirement = JoinRequirement.NONE;
   private volatile SlackBot bot;
   private int failedStarts = 0;
@@ -48,6 +56,7 @@ public class SlackBridgePlugin extends JavaPlugin {
       if (missing.isEmpty()) {
         // Connecting is network I/O, so it happens off the server thread
         this.getServer().getScheduler().runTaskAsynchronously(this, this::startBot);
+        this.startWebServer();
       } else {
         this.getLogger().severe("Slack is enabled but " + missing + " not set; see the README");
       }
@@ -75,6 +84,10 @@ public class SlackBridgePlugin extends JavaPlugin {
 
   @Override
   public void onDisable() {
+    if (this.webServer != null) {
+      this.webServer.stop();
+      this.webServer = null;
+    }
     SlackBot bot = this.bot;
     if (bot != null) {
       stopBot(bot);
@@ -140,6 +153,93 @@ public class SlackBridgePlugin extends JavaPlugin {
   /** In channel mode, only members of the bridge channel may join or use the Slack command. */
   public boolean isChannelOnly() {
     return this.joinRequirement == JoinRequirement.CHANNEL;
+  }
+
+  /** Starts click-to-link if a public URL and the Slack app's OAuth credentials are set. */
+  private void startWebServer() {
+    String publicUrl = this.getSetting("public-url", "SLACK_PUBLIC_URL");
+    String clientId = this.getSetting("client-id", "SLACK_CLIENT_ID");
+    String clientSecret = this.getSetting("client-secret", "SLACK_CLIENT_SECRET");
+    String tokenKey = this.getSetting("token-key", "SLACK_TOKEN_KEY");
+
+    if (publicUrl.isEmpty() && clientId.isEmpty() && clientSecret.isEmpty()) {
+      return;
+    }
+    if (publicUrl.isEmpty() || clientId.isEmpty() || clientSecret.isEmpty()) {
+      this.getLogger().warning("Click-to-link needs public-url, client-id and client-secret "
+          + "(or SLACK_PUBLIC_URL, SLACK_CLIENT_ID, SLACK_CLIENT_SECRET); it's off");
+      return;
+    }
+    if (!publicUrl.startsWith("https://")) {
+      this.getLogger().warning("public-url must start with https:// (Slack requires it); "
+          + "click-to-link is off");
+      return;
+    }
+
+    if (tokenKey.isEmpty()) {
+      this.getLogger().warning("No token-key/SLACK_TOKEN_KEY set, so players can't let the bridge "
+          + "post their chat as them; click-to-link will only link accounts");
+    } else {
+      this.tokenCipher = new TokenCipher(tokenKey);
+    }
+
+    int port = this.getConfig().getInt("settings.slack-link.web-port", DEFAULT_WEB_PORT);
+    try {
+      this.webServer = new LinkWebServer(this, publicUrl, port, clientId, clientSecret);
+      this.getLogger().info("Click-to-link is on at " + this.webServer.getPublicUrl()
+          + "/slack (listening on port " + port + ")");
+    } catch (IOException e) {
+      this.getLogger().log(Level.SEVERE, "Could not start the click-to-link web server on port "
+          + port, e);
+    }
+  }
+
+  public LinkWebServer getLinkWebServer() {
+    return this.webServer;
+  }
+
+  /** Encrypts stored Slack user tokens, or null if no token-key is set (posting as users is off). */
+  public TokenCipher getTokenCipher() {
+    return this.tokenCipher;
+  }
+
+  /**
+   * Links a player to a Slack account, keeping their post-as-you permission if it's the same Slack
+   * account and revoking it otherwise.
+   */
+  public void link(UUID uuid, String slackId, String name) {
+    Link old = this.linkStore.setLink(uuid, slackId, name);
+    if (old != null && !old.slackId().equals(slackId)) {
+      this.revokeStoredToken(old);
+    }
+  }
+
+  /** Removes a player's link and revokes their post-as-you permission. @return whether they were linked */
+  public boolean unlink(UUID uuid) {
+    Link removed = this.linkStore.removeLink(uuid);
+    this.revokeStoredToken(removed);
+    return removed != null;
+  }
+
+  /** Stops a player posting as themselves (revoking the token) but keeps them linked. */
+  public void dropUserToken(UUID uuid) {
+    Link link = this.linkStore.getLink(uuid);
+    if (link != null && link.userToken() != null) {
+      this.linkStore.clearUserToken(uuid, link.slackId());
+      this.revokeStoredToken(link);
+    }
+  }
+
+  /** Tells Slack to revoke a link's user token, if it has one and the bot is running. */
+  public void revokeStoredToken(Link link) {
+    SlackBot bot = this.bot;
+    if (link == null || link.userToken() == null || bot == null || this.tokenCipher == null) {
+      return;
+    }
+    String token = this.tokenCipher.decrypt(link.userToken());
+    if (token != null) {
+      bot.revokeUserToken(token);
+    }
   }
 
   public LinkStore getLinkStore() {

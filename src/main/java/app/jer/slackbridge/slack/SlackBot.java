@@ -10,6 +10,7 @@ import static net.kyori.adventure.text.serializer.plain.PlainTextComponentSerial
 
 import app.jer.slackbridge.LinkStore.Link;
 import app.jer.slackbridge.SlackBridgePlugin;
+import app.jer.slackbridge.TokenCipher;
 import app.jer.slackbridge.playermessages.SlackMessages;
 import com.slack.api.bolt.App;
 import com.slack.api.bolt.AppConfig;
@@ -38,6 +39,7 @@ import java.util.Map.Entry;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -66,12 +68,16 @@ import org.bukkit.metadata.MetadataValue;
 public class SlackBot implements Listener {
 
   public static final String DEFAULT_SLACK_ID_HELP =
-      "In Slack, open your profile, click <b>⋮</b> and choose <i>Copy member ID</i>";
+      "In Slack, open your profile, click the three dots and choose <i>Copy member ID</i>";
   private static final int MAX_NAME_LENGTH = 16;
   private static final long USER_CACHE_MILLIS = 10 * 60 * 1000;
   private static final long CHANNEL_MEMBERS_CACHE_MILLIS = 60 * 1000;
   // Slack message metadata type on chat relayed for a linked player
   private static final String CHAT_EVENT_TYPE = "minecraft_chat";
+  private static final long OWN_POST_MEMORY_MILLIS = 5 * 60 * 1000;
+  // chat.postMessage errors meaning a user token will never work again
+  private static final Set<String> REVOKED_TOKEN_ERRORS = Set.of("token_revoked", "invalid_auth",
+      "not_authed", "account_inactive", "token_expired", "missing_scope", "user_disabled");
   // <@U123>, <@U123|name>, <#C123|channel>, <!here>, <!subteam^S123|@team>, <https://url|label>
   private static final Pattern SLACK_ENTITY = Pattern.compile("<([@#!]?)([^<>|]+)(?:\\|([^<>]*))?>");
 
@@ -104,6 +110,14 @@ public class SlackBot implements Listener {
   // Posts to Slack in order without blocking the server thread
   private final ExecutorService outbox = Executors.newSingleThreadExecutor(
       runnable -> Thread.ofPlatform().name("SlackBridge-outbox").daemon().unstarted(runnable));
+  // Relays Slack messages into the game in order, off Bolt's threads so events are acked quickly
+  private final ExecutorService inbox = Executors.newSingleThreadExecutor(
+      runnable -> Thread.ofPlatform().name("SlackBridge-inbox").daemon().unstarted(runnable));
+  // Messages posted with a player's own token come back as ordinary messages from them; these
+  // track them so they aren't relayed back into the game
+  private final Map<String, Long> ownUserPosts = new ConcurrentHashMap<>();
+  private final Map<String, CompletableFuture<Void>> userPostsInFlight = new ConcurrentHashMap<>();
+  private final String teamId;
 
   public SlackBot(SlackBridgePlugin plugin) throws Exception {
     this.plugin = plugin;
@@ -115,13 +129,19 @@ public class SlackBot implements Listener {
         plugin.getConfig().getLong("settings.slack-link.link-code-expiration", 60 * 10) * 1000;
 
     this.app = new App(AppConfig.builder().singleTeamBotToken(this.botToken).build());
+    var auth = this.app.client().authTest(r -> r.token(this.botToken));
+    if (!auth.isOk()) {
+      throw new IllegalStateException("Slack auth.test failed: " + auth.getError());
+    }
+    this.teamId = auth.getTeamId();
 
     app.event(MessageEvent.class, (payload, ctx) -> {
       MessageEvent event = payload.getEvent();
       // Thread replies stay in Slack; only top-level channel messages are bridged
       boolean isThreadReply = event.getThreadTs() != null && !event.getThreadTs().equals(event.getTs());
       if (event.getBotId() == null && !isThreadReply) {
-        this.relayToMinecraft(event.getChannel(), event.getUser(), event.getText(), false);
+        this.inbox.execute(() -> this.relayToMinecraft(event.getChannel(), event.getUser(),
+            event.getTs(), event.getText(), false));
       }
       return ctx.ack();
     });
@@ -130,7 +150,8 @@ public class SlackBot implements Listener {
       MessageFileShareEvent event = payload.getEvent();
       boolean isThreadReply = event.getThreadTs() != null && !event.getThreadTs().equals(event.getTs());
       if (!isThreadReply) {
-        this.relayToMinecraft(event.getChannel(), event.getUser(), event.getText(), true);
+        this.inbox.execute(() -> this.relayToMinecraft(event.getChannel(), event.getUser(),
+            event.getTs(), event.getText(), true));
       }
       return ctx.ack();
     });
@@ -154,11 +175,33 @@ public class SlackBot implements Listener {
 
       this.pendingVerifications.remove(mcUuid);
       OfflinePlayer player = Bukkit.getOfflinePlayer(mcUuid);
-      this.plugin.getLinkStore().setLink(mcUuid, clickerId, player.getName());
+      this.plugin.link(mcUuid, clickerId, player.getName());
       ctx.respond(r -> r.replaceOriginal(true)
           .text("Your Slack account is now linked to *%s*.".formatted(escape(player.getName()))));
       this.sendToPlayer(mcUuid, SlackMessages.accountLinked());
 
+      return ctx.ack();
+    });
+
+    app.blockAction("undo-link", (req, ctx) -> {
+      String clickerId = req.getPayload().getUser().getId();
+      UUID mcUuid = UUID.fromString(req.getPayload().getActions().get(0).getValue());
+      Link link = this.plugin.getLinkStore().getLink(mcUuid);
+
+      // Only the Slack account that's linked can undo it, and only while it still is
+      if (link == null || !link.slackId().equals(clickerId)) {
+        ctx.respond(r -> r.replaceOriginal(true)
+            .text("That Minecraft account isn't linked to your Slack account anymore."));
+        return ctx.ack();
+      }
+
+      this.plugin.unlink(mcUuid);
+      this.plugin.getLogger().info("Slack user %s undid their link to %s".formatted(clickerId,
+          link.name()));
+      ctx.respond(r -> r.replaceOriginal(true).text(
+          "Unlinked. The Minecraft account *%s* is no longer linked to your Slack account."
+              .formatted(escape(link.name()))));
+      this.sendToPlayer(mcUuid, SlackMessages.linkUndone());
       return ctx.ack();
     });
 
@@ -206,6 +249,7 @@ public class SlackBot implements Listener {
         e.addSuppressed(closeException);
       }
       this.outbox.shutdownNow();
+      this.inbox.shutdownNow();
       throw e;
     }
     this.plugin.getLogger().info("Slack bridge started!");
@@ -220,6 +264,7 @@ public class SlackBot implements Listener {
     }
     this.outbox.shutdown();
     this.outbox.awaitTermination(5, TimeUnit.SECONDS);
+    this.inbox.shutdownNow();
     this.socketModeApp.stop();
   }
 
@@ -229,6 +274,93 @@ public class SlackBot implements Listener {
 
   public String getChannelId() {
     return this.channelId;
+  }
+
+  /** The Slack workspace the bot is installed in. */
+  public String getTeamId() {
+    return this.teamId;
+  }
+
+  public MethodsClient getClient() {
+    return this.app.client();
+  }
+
+  public long getLinkCodeExpirationMillis() {
+    return this.linkCodeExpirationMillis;
+  }
+
+  /**
+   * Finishes a click-to-link sign-in. With postsAsUser, the player's chat will be posted with their
+   * own token; otherwise the token was only needed to learn who they are, so it's revoked.
+   */
+  public void completeOAuthLink(UUID uuid, String name, String slackId, String userToken,
+      boolean postsAsUser) {
+    TokenCipher cipher = this.plugin.getTokenCipher();
+    boolean keepToken = postsAsUser && cipher != null && userToken != null;
+    Link old = this.plugin.getLinkStore().setLink(uuid, slackId, name,
+        keepToken ? cipher.encrypt(userToken) : null);
+
+    if (!keepToken) {
+      this.revokeUserToken(userToken);
+    }
+    // Slack may hand back the same token on re-authorization; don't revoke the one now in use
+    if (old != null && old.userToken() != null
+        && !(keepToken && userToken.equals(cipher.decrypt(old.userToken())))) {
+      this.plugin.revokeStoredToken(old);
+    }
+
+    this.plugin.getLogger().info("%s linked to Slack user %s through Slack sign-in%s".formatted(
+        name, slackId, keepToken ? ", posting chat as them" : ""));
+    this.sendToPlayer(uuid, SlackMessages.accountLinked());
+    this.sendLinkedNotice(uuid, name, slackId, keepToken);
+  }
+
+  /**
+   * DMs the Slack user which Minecraft account they just linked, with a button to undo it. A
+   * click-to-link URL can be passed to someone else, and this is where they'd notice.
+   */
+  private void sendLinkedNotice(UUID uuid, String name, String slackId, boolean postsAsUser) {
+    String notice = ("Your Slack account was just linked to the Minecraft account *%s*. %s"
+        + " If this wasn't you, unlink it now.").formatted(escape(name), postsAsUser
+        ? "Anything that player types in Minecraft chat will be posted as you in <#%s>."
+            .formatted(this.channelId)
+        : "That player's Minecraft chat will be posted under your Slack name and photo.");
+
+    this.enqueue(() -> {
+      try {
+        var res = app.client().chatPostMessage(r -> r.token(this.botToken).channel(slackId)
+            .text(notice).blocks(asBlocks(section(sec -> sec.text(markdownText(notice))),
+                actions(actions -> actions.elements(asElements(button(b -> b.actionId("undo-link")
+                    .text(com.slack.api.model.block.composition.BlockCompositions.plainText(
+                        pt -> pt.text("Not me, unlink"))).value(uuid.toString())
+                    .style("danger"))))))));
+        if (!res.isOk()) {
+          this.plugin.getLogger().warning("Could not DM " + slackId + " about their new link: "
+              + res.getError());
+        }
+      } catch (IOException | SlackApiException e) {
+        this.plugin.getLogger().log(Level.WARNING, "Could not DM " + slackId
+            + " about their new link", e);
+      }
+    });
+  }
+
+  /** Revokes a Slack user token in the background. */
+  public void revokeUserToken(String token) {
+    if (token == null) {
+      return;
+    }
+    this.enqueue(() -> {
+      try {
+        var res = this.app.client().authRevoke(r -> r.token(token));
+        if (!res.isOk() && !"token_revoked".equals(res.getError())
+            && !"invalid_auth".equals(res.getError())) {
+          this.plugin.getLogger().warning("Could not revoke a Slack user token: " + res.getError());
+        }
+      } catch (IOException | SlackApiException e) {
+        this.plugin.getLogger().log(Level.WARNING, "Could not revoke a Slack user token", e);
+      }
+    });
   }
 
   /** A Slack user's display name, falling back to their real name and then their username. */
@@ -269,9 +401,18 @@ public class SlackBot implements Listener {
     String text = escape(plainText().serialize(e.message()));
     String displayName = plainText().serialize(player.displayName());
     String avatar = this.getPlayerAvatarLink(player);
-    String slackId = this.plugin.getLinkStore().getSlackId(uuid);
+    Link link = this.plugin.getLinkStore().getLink(uuid);
+    String slackId = link == null ? null : link.slackId();
 
     this.enqueue(() -> {
+      // Players who allowed it post as themselves; if that fails, fall back to posting for them
+      if (link != null && link.userToken() != null && this.plugin.getTokenCipher() != null) {
+        String token = this.plugin.getTokenCipher().decrypt(link.userToken());
+        if (token != null && this.sendAsUser(uuid, link.slackId(), token, text)) {
+          return;
+        }
+      }
+
       User user = slackId == null ? null : this.getActiveUser(slackId);
       if (user == null) {
         this.send(text, avatar, displayName, true, null);
@@ -287,6 +428,60 @@ public class SlackBot implements Listener {
       this.send(text, profileImage != null ? profileImage : avatar, displayNameOf(user), true,
           metadata);
     });
+  }
+
+  /**
+   * Posts a chat message with the player's own Slack token, so it's a real message from them.
+   * Call it from the outbox thread.
+   *
+   * @return whether it was posted
+   */
+  private boolean sendAsUser(UUID uuid, String slackId, String token, String text) {
+    CompletableFuture<Void> done = new CompletableFuture<>();
+    this.userPostsInFlight.put(slackId, done);
+    try {
+      var res = app.client().chatPostMessage(r -> r.token(token).channel(this.channelId).text(text)
+          .mrkdwn(true));
+      if (res.isOk()) {
+        long now = System.currentTimeMillis();
+        this.ownUserPosts.values().removeIf(postedAt -> now - postedAt > OWN_POST_MEMORY_MILLIS);
+        this.ownUserPosts.put(res.getTs(), now);
+        return true;
+      }
+
+      if (REVOKED_TOKEN_ERRORS.contains(res.getError())) {
+        // They revoked it in Slack, or the account is gone; stop trying it
+        this.plugin.getLinkStore().clearUserToken(uuid, slackId);
+        this.plugin.getLogger().info("Slack user " + slackId + "'s token stopped working ("
+            + res.getError() + "); their chat is now posted by the bot");
+      } else {
+        // For example not_in_channel: post this one for them instead, and try again next time
+        this.plugin.getLogger().fine("Could not post as " + slackId + ": " + res.getError());
+      }
+      return false;
+    } catch (IOException | SlackApiException e) {
+      this.plugin.getLogger().log(Level.WARNING, "Could not post as Slack user " + slackId, e);
+      return false;
+    } finally {
+      this.userPostsInFlight.remove(slackId, done);
+      done.complete(null);
+    }
+  }
+
+  /**
+   * Whether a message from Slack is one this plugin just posted with that user's token. Waits for
+   * a post that's still on its way, since Slack can send the event before the post call returns.
+   */
+  private boolean isOwnUserPost(String userId, String ts) {
+    CompletableFuture<Void> inFlight = this.userPostsInFlight.get(userId);
+    if (inFlight != null) {
+      try {
+        inFlight.get(10, TimeUnit.SECONDS);
+      } catch (Exception ignored) {
+        // Fall through and check what we know
+      }
+    }
+    return ts != null && this.ownUserPosts.remove(ts) != null;
   }
 
   /** The Slack user, or null if they can't be looked up or have been deactivated. */
@@ -491,7 +686,7 @@ public class SlackBot implements Listener {
       return "This Minecraft account is already linked to <@%s>".formatted(existing);
     }
 
-    this.plugin.getLinkStore().setLink(linkCode.uuid(), slackId, linkCode.name());
+    this.plugin.link(linkCode.uuid(), slackId, linkCode.name());
     this.mcLinkCodes.remove(linkCode.uuid());
     this.sendToPlayer(linkCode.uuid(), SlackMessages.accountLinked());
 
@@ -549,8 +744,9 @@ public class SlackBot implements Listener {
     return message.toString();
   }
 
-  private void relayToMinecraft(String channel, String userId, String text, boolean hasFiles) {
-    if (!this.channelId.equals(channel) || userId == null) {
+  private void relayToMinecraft(String channel, String userId, String ts, String text,
+      boolean hasFiles) {
+    if (!this.channelId.equals(channel) || userId == null || this.isOwnUserPost(userId, ts)) {
       return;
     }
 
