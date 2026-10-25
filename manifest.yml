@@ -1,0 +1,42 @@
+# Slack app manifest for SlackBridge. Create the app at https://api.slack.com/apps with
+# "Create New App" -> "From an app manifest" and paste this file.
+#
+# One Slack app per server. Before creating it, rename the app and bot, and change the slash command
+# to a name that is unique in the workspace. Set the same command name (without "/") as
+# base-command in plugins/SlackBridge/config.yml or as the SLACK_COMMAND environment variable.
+display_information:
+  name: Minecraft
+  description: Bridges chat between a Minecraft server and Slack
+features:
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: true
+  bot_user:
+    display_name: Minecraft
+    always_online: true
+  slash_commands:
+    - command: /mc
+      description: Talk to the Minecraft server
+      usage_hint: "players | link <code> | lookup <@user or player>"
+      should_escape: true
+oauth_config:
+  scopes:
+    bot:
+      - channels:history
+      - groups:history
+      - chat:write
+      - chat:write.customize
+      - commands
+      - im:write
+      - users:read
+settings:
+  event_subscriptions:
+    bot_events:
+      - message.channels
+      - message.groups
+  interactivity:
+    is_enabled: true
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false

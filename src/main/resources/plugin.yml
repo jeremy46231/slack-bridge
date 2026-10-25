@@ -1,59 +1,14 @@
 name: ${name}
 version: ${version}
-api-version: 1.21
-main: com.hackclub.hccore.HCCorePlugin
-depend:
-  - UltimateAdvancementAPI
-  - ProtocolLib
-softdepend:
-  - SuperVanish
-  - PremiumVanish
-  - PlaceholderAPI
+api-version: '26.3'
+main: app.jer.slackbridge.SlackBridgePlugin
+description: Two-way Slack chat bridge and Slack account linking (forked from HCCore)
 commands:
-  afk:
-    description: Toggles your AFK status
-    usage: /<command>
-    aliases: [ a, away ]
-  color:
-    description: Sets your chat or name color
-    usage: /<command> <chat|name> [color]
-    aliases:
-      - colour
-  loc:
-    description: Manage your saved locations
-    usage: /<command> <del|get|list|rename|save|share> [...args]
-    aliases:
-      - locations
-  nick:
-    description: Sets your nickname
-    usage: /<command> [nickname]
-    aliases:
-      - nickname
-  ping:
-    description: Gets the ping of you or a specified player
-    usage: /ping [player]
   slack:
-    description: Manage the HackCraft Slack integration
-    usage: /slack <(link <slackId>) | (lookup <player>) | info>
-  spawn:
-    description: Teleports you to the world’s spawn location
-    usage: /spawn
-  stats:
-    description: Gets the stats of you or a specified player
-    usage: /stats [player] [extended|only] <statistic>
-  welcome:
-    description: Resends the Welcome (first-join) message
-    usage: /<command>
-  rules:
-    description: gets the rules
-    usage: /<command>
-  msg:
-    description: message a player
-    usage: /<command> <player> <message>
-    aliases:
-      - whisper
-  reply:
-    description: reply to a player
-    usage: /<command> <message>
-    aliases:
-      - r
+    description: Manage your Slack account link
+    usage: /<command> <info | link <slackId> | unlink | lookup <player>>
+    permission: slackbridge.command.slack
+permissions:
+  slackbridge.command.slack:
+    description: Use /slack info, link, unlink and lookup
+    default: true
