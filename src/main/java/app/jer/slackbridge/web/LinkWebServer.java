@@ -75,6 +75,7 @@ public class LinkWebServer {
   private final Map<String, PendingLink> pendingLinks = new ConcurrentHashMap<>();
   // Wrong or expired codes per visitor, so nobody can try every code
   private final Map<String, Misses> misses = new ConcurrentHashMap<>();
+  private volatile boolean warnedNoForwardedFor = false;
   private final SecureRandom random = new SecureRandom();
 
   public LinkWebServer(SlackBridgePlugin plugin, String publicUrl, int port, String clientId,
@@ -138,9 +139,9 @@ public class LinkWebServer {
    * @return the pending link, or null if the request has been answered
    */
   private PendingLink findPending(HttpExchange exchange, String code) throws IOException {
-    String visitor = visitor(exchange);
+    String visitor = this.visitor(exchange);
     long now = System.currentTimeMillis();
-    Misses visitorMisses = this.misses.get(visitor);
+    Misses visitorMisses = visitor == null ? null : this.misses.get(visitor);
     if (visitorMisses != null && now - visitorMisses.windowStart() < MISS_WINDOW_MILLIS
         && visitorMisses.count() >= MAX_MISSES) {
       this.respond(exchange, 429, "Too many tries", "<p>Wait a few minutes and try again.</p>");
@@ -152,6 +153,10 @@ public class LinkWebServer {
       return pending;
     }
 
+    if (visitor == null) {
+      this.respondExpired(exchange);
+      return null;
+    }
     if (this.misses.size() > 10_000) {
       this.misses.values().removeIf(entry -> now - entry.windowStart() >= MISS_WINDOW_MILLIS);
     }
@@ -163,16 +168,24 @@ public class LinkWebServer {
   }
 
   /**
-   * Who's asking. Behind the ingress every request comes from the proxy, which adds the client's
-   * address as the last X-Forwarded-For entry (earlier entries can be made up by the client).
+   * Who's asking, from the last X-Forwarded-For entry, which the proxy in front of this server adds
+   * (earlier entries can be made up by the client). Without the header every request looks like it
+   * comes from the proxy, and limiting that would lock everyone out, so the limit is skipped.
+   *
+   * @return the visitor's address, or null if the proxy didn't say
    */
-  private static String visitor(HttpExchange exchange) {
+  private String visitor(HttpExchange exchange) {
     String forwarded = exchange.getRequestHeaders().getFirst("X-Forwarded-For");
-    if (forwarded != null && !forwarded.isBlank()) {
-      String[] hops = forwarded.split(",");
-      return hops[hops.length - 1].trim();
+    if (forwarded == null || forwarded.isBlank()) {
+      if (!this.warnedNoForwardedFor) {
+        this.warnedNoForwardedFor = true;
+        this.plugin.getLogger().warning("Link requests have no X-Forwarded-For header, so the "
+            + "limit on wrong link codes is off. Have the proxy in front of web-port add it.");
+      }
+      return null;
     }
-    return exchange.getRemoteAddress().getAddress().getHostAddress();
+    String[] hops = forwarded.split(",");
+    return hops[hops.length - 1].trim();
   }
 
   private void route(HttpExchange exchange) throws IOException {

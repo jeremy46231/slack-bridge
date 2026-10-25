@@ -155,7 +155,9 @@ can click a disconnect screen, so the address is short enough to type: just six 
 keeps the same address until it expires, so asking again or rejoining doesn't break one they're
 halfway through typing. Codes only exist for a few minutes, and someone who enters 20 wrong or
 expired codes in 10 minutes has to wait, so guessing someone's code isn't practical; and if it
-happened, the page names the Minecraft account and the player can just `/slack unlink`.
+happened, the page names the Minecraft account and the player can just `/slack unlink`. The limit
+tells visitors apart by the `X-Forwarded-For` header the proxy in front of `web-port` adds; without
+it, the limit is skipped and the log says so once.
 
 How it goes:
 
