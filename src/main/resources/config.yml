@@ -36,10 +36,3 @@ settings:
     deaths: true
     advancements: true
     server-start-stop: true
-  # Icons for event posts: a Slack emoji (:name:) or an image URL
-  icons:
-    join: ":wave:"
-    leave: ":door:"
-    death: ":skull:"
-    advancement: ":trophy:"
-    server: ":desktop_computer:"

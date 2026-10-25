@@ -12,8 +12,10 @@ What it does:
   display name and head as the avatar; Slack messages show up in game as `[Slack] name » message`.
   Mentions, channel links and URLs are turned into readable (and clickable) text. Thread replies stay
   in Slack.
-- **Game events** posted to Slack: joins and leaves, deaths, advancements, and server start and stop.
-  Each can be turned off. Players vanished with EssentialsX are not announced.
+- **Game events** posted to Slack by the bot, with exactly the text the game shows in chat: joins and
+  leaves, deaths and advancements (for example "Steve has made the advancement [Stone Age]"), plus
+  "Server started" and "Server stopped". Each can be turned off. Anything the game doesn't announce
+  isn't posted, and players vanished with EssentialsX are not announced.
 - **Account linking** with `/slack` in game and your own slash command in Slack.
 - **Join requirements** (optional): only let in players with a linked Slack account, or only those
   whose linked account is a member of the bridge channel, so the channel works as a whitelist.
@@ -58,7 +60,7 @@ Why each scope is there:
 | `channels:history`, `groups:history` | Receiving messages from the bridge channel (public or private) |
 | `channels:read`, `groups:read` | Listing the channel's members for `join-requirement: channel`, and its name for messages |
 | `chat:write` | Posting to the channel and sending link-verification DMs |
-| `chat:write.customize` | Posting under each player's name and head, and event posts under their own name and emoji |
+| `chat:write.customize` | Posting each player's chat under their name and head |
 | `commands` | The slash command |
 | `im:write` | Opening the verification DM with a user |
 | `users:read` | Showing Slack display names in game and checking linked accounts are still active |
@@ -101,12 +103,6 @@ settings:
     deaths: true
     advancements: true
     server-start-stop: true
-  icons:                   # a Slack emoji (:name:) or an image URL
-    join: ":wave:"
-    leave: ":door:"
-    death: ":skull:"
-    advancement: ":trophy:"
-    server: ":desktop_computer:"
 ```
 
 The tokens, channel ID and slash command can live in the config file or in environment variables.
@@ -141,7 +137,7 @@ In game (`/slack`, permission `slackbridge.command.slack`, everyone by default):
 | --- | --- |
 | `/slack info` | Shows your linked Slack account, or how to link one |
 | `/slack link` | Gives you a code to run as `/mc link <code>` in Slack |
-| `/slack link <slackId>` | DMs that Slack user a Verify / Deny prompt instead |
+| `/slack link <slackId>` | DMs that Slack user a "Yes, link it" / "No" prompt instead |
 | `/slack unlink` | Removes your link |
 | `/slack lookup <player>` | Shows the Slack name a player is linked to |
 
@@ -198,18 +194,20 @@ Bedrock one through Floodgate).
   if Slack can't be reached when the server starts.
 - Built against Paper 26.3 and Java 25, with Slack Bolt 1.52.0.
 - No workspace-specific branding: the slash command must be configured, the linking instructions
-  are configurable, and event posts use Slack emoji instead of hosted images.
+  are configurable, and game events are posted by the bot itself instead of under per-event names
+  and hosted images.
 - Slack posts go out on a background thread instead of blocking the server thread, and `/slack`
   lookups run asynchronously.
 - Player text is escaped before it goes to Slack, so in-game chat can't trigger `@channel` or other
   mentions; messages from muted players (cancelled chat events) are not bridged.
-- Verify buttons only work for the Slack user the request was sent to, before the code expires, and
+- Event posts use the game's own chat text, and the link confirmation DM is a short yes/no
+  question. Its buttons only work for the Slack user it was sent to, before the code expires, and
   the prompt is replaced with the result.
 - Player names come from the server's display name (so EssentialsX nicknames show up), and links
   are kept in one `links.yml` instead of per-player JSON files.
 - `required: true/false` became `join-requirement`, which adds a channel-members-only mode; operators
   bypass it.
-- Added `/slack link` (code), `/slack unlink`, `/slack admin`, per-event toggles and icons, a configurable avatar
+- Added `/slack link` (code), `/slack unlink`, `/slack admin`, per-event toggles, a configurable avatar
   URL, and environment-variable fallbacks for the tokens, channel and slash command.
 
 ## License

@@ -26,7 +26,6 @@ import com.slack.api.model.event.MessageDeletedEvent;
 import com.slack.api.model.event.MessageEvent;
 import com.slack.api.model.event.MessageFileShareEvent;
 import com.slack.api.socket_mode.SocketModeClient;
-import io.papermc.paper.advancement.AdvancementDisplay;
 import io.papermc.paper.event.player.AsyncChatEvent;
 import java.io.IOException;
 import java.security.SecureRandom;
@@ -52,7 +51,6 @@ import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextDecoration;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
-import org.bukkit.advancement.Advancement;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -163,7 +161,7 @@ public class SlackBot implements Listener {
     app.blockAction("deny-link", (req, ctx) -> {
       UUID mcUuid = UUID.fromString(req.getPayload().getActions().get(0).getValue());
       this.pendingVerifications.remove(mcUuid);
-      ctx.respond(r -> r.replaceOriginal(true).text("Denied link request"));
+      ctx.respond(r -> r.replaceOriginal(true).text("OK, nothing was linked."));
       this.sendToPlayer(mcUuid, SlackMessages.linkDenied());
       return ctx.ack();
     });
@@ -208,13 +206,13 @@ public class SlackBot implements Listener {
     }
     this.plugin.getLogger().info("Slack bridge started!");
     if (this.isEventEnabled("server-start-stop")) {
-      sendMessage(":large_green_circle: *Server Started*", this.icon("server"), "Console");
+      post(":large_green_circle: Server started", null, null, true);
     }
   }
 
   public void disconnect() throws Exception {
     if (this.isEventEnabled("server-start-stop")) {
-      sendMessage(":octagonal_sign: *Server Stopped*", this.icon("server"), "Console");
+      post(":octagonal_sign: Server stopped", null, null, true);
     }
     this.outbox.shutdown();
     this.outbox.awaitTermination(5, TimeUnit.SECONDS);
@@ -262,64 +260,42 @@ public class SlackBot implements Listener {
       return;
     }
     Player player = e.getPlayer();
-    sendMessage(escape(plainText().serialize(e.message())), this.getPlayerAvatarLink(player),
-        plainText().serialize(player.displayName()));
+    post(escape(plainText().serialize(e.message())), this.getPlayerAvatarLink(player),
+        plainText().serialize(player.displayName()), true);
   }
+
+  // Game events are posted with the same text the game shows in chat, so a suppressed message
+  // (null) isn't posted either
 
   @EventHandler(priority = EventPriority.MONITOR)
   public void onJoin(PlayerJoinEvent e) {
     Player player = e.getPlayer();
     this.plugin.getLinkStore().updateName(player.getUniqueId(), player.getName());
-    if (!this.isEventEnabled("join-leave") || isVanished(player)) {
-      return;
+    if (this.isEventEnabled("join-leave") && !isVanished(player)) {
+      this.postEvent(e.joinMessage());
     }
-    sendMessage("*" + escape(plainText().serialize(player.displayName())) + "* joined the game!",
-        this.icon("join"), "Join");
   }
 
   @EventHandler(priority = EventPriority.MONITOR)
   public void onQuit(PlayerQuitEvent e) {
-    Player player = e.getPlayer();
-    if (!this.isEventEnabled("join-leave") || isVanished(player)) {
-      return;
+    if (this.isEventEnabled("join-leave") && !isVanished(e.getPlayer())) {
+      this.postEvent(e.quitMessage());
     }
-    sendMessage("*" + escape(plainText().serialize(player.displayName())) + "* left the game!",
-        this.icon("leave"), "Leave");
   }
 
   @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
   public void onDeath(PlayerDeathEvent e) {
-    Component deathMessage = e.deathMessage();
-    if (!this.isEventEnabled("deaths") || deathMessage == null) {
-      return;
+    if (this.isEventEnabled("deaths")) {
+      this.postEvent(e.deathMessage());
     }
-    sendMessage(escape(plainText().serialize(deathMessage)), this.icon("death"), "R.I.P.");
   }
 
   @EventHandler(priority = EventPriority.MONITOR)
   public void onAdvancementDone(PlayerAdvancementDoneEvent e) {
-    Advancement advancement = e.getAdvancement();
-
-    // Filter out hidden advancements and recipes
-    if (!this.isEventEnabled("advancements") || advancement.getDisplay() == null) {
-      return;
+    // Hidden advancements and recipes have no announcement
+    if (this.isEventEnabled("advancements")) {
+      this.postEvent(e.message());
     }
-    if (!advancement.getDisplay().doesAnnounceToChat()) {
-      return;
-    }
-
-    String advancementName = plainText().serialize(advancement.getDisplay().title());
-
-    String advancementType;
-    switch (advancement.getDisplay().frame()) {
-      case AdvancementDisplay.Frame.GOAL -> advancementType = "goal";
-      case AdvancementDisplay.Frame.CHALLENGE -> advancementType = "challenge";
-      default -> advancementType = "advancement";
-    }
-
-    sendMessage("%s has completed the %s *%s*".formatted(
-        escape(plainText().serialize(e.getPlayer().displayName())), advancementType,
-        escape(advancementName)), this.icon("advancement"), "Advancement");
   }
 
   public enum JoinCheck { ALLOWED, NOT_LINKED, NOT_IN_CHANNEL }
@@ -421,20 +397,16 @@ public class SlackBot implements Listener {
     MethodsClient client = app.client();
 
     try {
-      var res = client.chatPostMessage(r -> r.token(this.botToken).channel(id).text(
-              "A player on the Minecraft server with username " + mcName
-                  + " (UUID " + uuid + ") is trying to link to your Slack account")
-          .blocks(asBlocks(section(s -> s.text(
-              markdownText("A player on the Minecraft server with username *" + escape(mcName)
-                  + "*" + " (UUID `" + uuid + "`) is trying to link to " + "your "
-                  + "Slack account. If you are this player, click the \"Verify\" button. If you "
-                  + "are " + "not this player, click the \"Deny\" button."))), actions(
+      String question = "Someone on the Minecraft server is trying to link the account *%s* to your Slack account. Is this you?"
+          .formatted(escape(mcName));
+      var res = client.chatPostMessage(r -> r.token(this.botToken).channel(id).text(question)
+          .blocks(asBlocks(section(s -> s.text(markdownText(question))), actions(
               actions -> actions.elements(asElements(button(b -> b.actionId("verify-link").text(
                   com.slack.api.model.block.composition.BlockCompositions.plainText(
-                      pt -> pt.text("Verify"))).value(uuid).style("primary")), button(
+                      pt -> pt.text("Yes, link it"))).value(uuid).style("primary")), button(
                   b -> b.actionId("deny-link").text(
                       com.slack.api.model.block.composition.BlockCompositions.plainText(
-                          pt -> pt.text("Deny"))).value(uuid).style("danger"))))))));
+                          pt -> pt.text("No"))).value(uuid))))))));
 
       if (!res.isOk()) {
         this.plugin.getLogger()
@@ -639,23 +611,28 @@ public class SlackBot implements Listener {
     });
   }
 
-  /** The icon for an event's posts: a Slack emoji like :wave: or an image URL. */
-  private String icon(String event) {
-    return this.plugin.getConfig().getString("settings.icons." + event, ":speech_balloon:");
+  /** Posts a game message as the bot itself, with Slack formatting off so names show as-is. */
+  private void postEvent(Component message) {
+    if (message != null) {
+      this.post(escape(plainText().serialize(message)), null, null, false);
+    }
   }
 
-  /** @param icon a Slack emoji such as :skull:, or an image URL */
-  void sendMessage(String msg, String icon, String username) {
+  /**
+   * Posts to the bridge channel in the background.
+   *
+   * @param iconUrl  avatar to post with, or null for the bot's own
+   * @param username name to post as, or null for the bot's own
+   * @param mrkdwn   whether Slack should apply *bold*, _italic_ and similar formatting
+   */
+  void post(String msg, String iconUrl, String username, boolean mrkdwn) {
     if (this.outbox.isShutdown()) {
       return;
     }
     this.outbox.execute(() -> {
       try {
-        var res = app.client().chatPostMessage(
-            r -> {
-              r.token(this.botToken).channel(this.channelId).text(msg).username(username);
-              return icon.startsWith(":") ? r.iconEmoji(icon) : r.iconUrl(icon);
-            });
+        var res = app.client().chatPostMessage(r -> r.token(this.botToken)
+            .channel(this.channelId).text(msg).mrkdwn(mrkdwn).iconUrl(iconUrl).username(username));
 
         if (!res.isOk()) {
           this.plugin.getLogger().log(Level.WARNING, "SlackBot failed to send message: " + res.getError());

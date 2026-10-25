@@ -89,9 +89,9 @@ public final class SlackMessages {
         linkedSlackUser == null ? slackInvalid : text(linkedSlackUser.getId());
 
     return miniMessage().deserialize("""
-            <b><green>Your MC account is linked to Slack!</green></b>
-            <hover:show_text:'<b>Your MC account</b>
-            MC UUID: <mcuuid>'><mcname></hover> <b><--></b> <hover:show_text:'<b>Your Slack account</b>
+            <b><green>Your Minecraft account is linked to Slack!</green></b>
+            <hover:show_text:'<b>Your Minecraft account</b>
+            Minecraft UUID: <mcuuid>'><mcname></hover> <b><--></b> <hover:show_text:'<b>Your Slack account</b>
             Slack Name: <slackname>
             Slack ID: <slackid>'><slackuser></hover>""",
         TagResolver.resolver(Placeholder.component("mcname", player.displayName()),
@@ -103,7 +103,7 @@ public final class SlackMessages {
 
   public static Component slackUsername(String playerName, String slackName) {
     return miniMessage().deserialize("""
-            <green>Slack username for <player>: <username></green>""",
+            <green><player> is linked to <username> on Slack</green>""",
         TagResolver.resolver(Placeholder.unparsed("player", playerName),
             Placeholder.unparsed("username", slackName)));
   }
@@ -121,7 +121,7 @@ public final class SlackMessages {
   }
 
   public static Component invalidSlack() {
-    return miniMessage().deserialize("<red>That Slack ID is invalid!</red>");
+    return miniMessage().deserialize("<red>Couldn't find a Slack user with that ID. Member IDs start with U.</red>");
   }
 
   public static Component linkDenied() {
