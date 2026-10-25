@@ -18,6 +18,7 @@ import com.slack.api.bolt.response.Response;
 import com.slack.api.bolt.socket_mode.SocketModeApp;
 import com.slack.api.methods.MethodsClient;
 import com.slack.api.methods.SlackApiException;
+import com.slack.api.model.Message;
 import com.slack.api.model.User;
 import com.slack.api.model.event.MessageBotEvent;
 import com.slack.api.model.event.MessageChangedEvent;
@@ -40,6 +41,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.regex.Matcher;
@@ -68,6 +70,8 @@ public class SlackBot implements Listener {
   private static final int MAX_NAME_LENGTH = 16;
   private static final long USER_CACHE_MILLIS = 10 * 60 * 1000;
   private static final long CHANNEL_MEMBERS_CACHE_MILLIS = 60 * 1000;
+  // Slack message metadata type on chat relayed for a linked player
+  private static final String CHAT_EVENT_TYPE = "minecraft_chat";
   // <@U123>, <@U123|name>, <#C123|channel>, <!here>, <!subteam^S123|@team>, <https://url|label>
   private static final Pattern SLACK_ENTITY = Pattern.compile("<([@#!]?)([^<>|]+)(?:\\|([^<>]*))?>");
 
@@ -260,8 +264,40 @@ public class SlackBot implements Listener {
       return;
     }
     Player player = e.getPlayer();
-    post(escape(plainText().serialize(e.message())), this.getPlayerAvatarLink(player),
-        plainText().serialize(player.displayName()), true);
+    UUID uuid = player.getUniqueId();
+    String playerName = player.getName();
+    String text = escape(plainText().serialize(e.message()));
+    String displayName = plainText().serialize(player.displayName());
+    String avatar = this.getPlayerAvatarLink(player);
+    String slackId = this.plugin.getLinkStore().getSlackId(uuid);
+
+    this.enqueue(() -> {
+      User user = slackId == null ? null : this.getActiveUser(slackId);
+      if (user == null) {
+        this.send(text, avatar, displayName, true, null);
+        return;
+      }
+
+      // Linked players post as their Slack profile. The metadata names the real sender for clients
+      // that show it, like Taut's ShowRealUser.
+      String profileImage = user.getProfile() == null ? null : user.getProfile().getImage192();
+      Message.Metadata metadata = new Message.Metadata(CHAT_EVENT_TYPE,
+          Map.of("source_user_id", slackId, "minecraft_uuid", uuid.toString(), "minecraft_name",
+              playerName));
+      this.send(text, profileImage != null ? profileImage : avatar, displayNameOf(user), true,
+          metadata);
+    });
+  }
+
+  /** The Slack user, or null if they can't be looked up or have been deactivated. */
+  private User getActiveUser(String slackId) {
+    try {
+      User user = this.getUserInfo(slackId);
+      return user == null || user.isDeleted() ? null : user;
+    } catch (IOException e) {
+      this.plugin.getLogger().log(Level.WARNING, "Could not look up Slack user " + slackId, e);
+      return null;
+    }
   }
 
   // Game events are posted with the same text the game shows in chat, so a suppressed message
@@ -626,21 +662,31 @@ public class SlackBot implements Listener {
    * @param mrkdwn   whether Slack should apply *bold*, _italic_ and similar formatting
    */
   void post(String msg, String iconUrl, String username, boolean mrkdwn) {
-    if (this.outbox.isShutdown()) {
-      return;
-    }
-    this.outbox.execute(() -> {
-      try {
-        var res = app.client().chatPostMessage(r -> r.token(this.botToken)
-            .channel(this.channelId).text(msg).mrkdwn(mrkdwn).iconUrl(iconUrl).username(username));
+    this.enqueue(() -> this.send(msg, iconUrl, username, mrkdwn, null));
+  }
 
-        if (!res.isOk()) {
-          this.plugin.getLogger().log(Level.WARNING, "SlackBot failed to send message: " + res.getError());
-        }
-      } catch (IOException | SlackApiException e) {
-        this.plugin.getLogger().log(Level.WARNING, "SlackBot failed to send message", e);
+  /** Runs a task on the outbox thread, which posts to Slack in order. */
+  private void enqueue(Runnable task) {
+    try {
+      this.outbox.execute(task);
+    } catch (RejectedExecutionException e) {
+      // Shutting down
+    }
+  }
+
+  /** Posts to the bridge channel right away; call it from the outbox thread. */
+  private void send(String msg, String iconUrl, String username, boolean mrkdwn,
+      Message.Metadata metadata) {
+    try {
+      var res = app.client().chatPostMessage(r -> r.token(this.botToken).channel(this.channelId)
+          .text(msg).mrkdwn(mrkdwn).iconUrl(iconUrl).username(username).metadata(metadata));
+
+      if (!res.isOk()) {
+        this.plugin.getLogger().log(Level.WARNING, "SlackBot failed to send message: " + res.getError());
       }
-    });
+    } catch (IOException | SlackApiException e) {
+      this.plugin.getLogger().log(Level.WARNING, "SlackBot failed to send message", e);
+    }
   }
 
   /** EssentialsX and most vanish plugins set this metadata on vanished players. */

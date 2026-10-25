@@ -27,7 +27,8 @@ settings:
     # Shown in /slack info to explain how to find your Slack member ID (MiniMessage format), e.g.
     # "Run <gold>/id</gold> in Slack to see it" in the Hack Club Slack
     slack-id-help: "In Slack, open your profile, click <b>⋮</b> and choose <i>Copy member ID</i>"
-    # Avatar shown next to bridged chat messages. {uuid} and {name} are replaced.
+    # Avatar for chat from players without a linked Slack account (linked players post with their
+    # Slack profile picture). {uuid} and {name} are replaced.
     avatar-url: "https://mc-heads.net/avatar/{uuid}/128"
   # Which game events are posted to Slack
   events:

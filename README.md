@@ -8,8 +8,10 @@ vanish hooks and so on) has been removed so it can run next to EssentialsX witho
 
 What it does:
 
-- **Two-way chat** between the server and one Slack channel. Players' messages are posted with their
-  display name and head as the avatar; Slack messages show up in game as `[Slack] name » message`.
+- **Two-way chat** between the server and one Slack channel. Players who have linked Slack post under
+  their Slack display name and profile picture, with message metadata naming their Slack account
+  (`event_type: minecraft_chat`, `event_payload.source_user_id`); everyone else posts under their
+  Minecraft display name and head. Slack messages show up in game as `[Slack] name » message`.
   Mentions, channel links and URLs are turned into readable (and clickable) text. Thread replies stay
   in Slack.
 - **Game events** posted to Slack by the bot, with exactly the text the game shows in chat: joins and
@@ -60,7 +62,7 @@ Why each scope is there:
 | `channels:history`, `groups:history` | Receiving messages from the bridge channel (public or private) |
 | `channels:read`, `groups:read` | Listing the channel's members for `join-requirement: channel`, and its name for messages |
 | `chat:write` | Posting to the channel and sending link-verification DMs |
-| `chat:write.customize` | Posting each player's chat under their name and head |
+| `chat:write.customize` | Posting each player's chat under their Slack profile, or their Minecraft name and head |
 | `commands` | The slash command |
 | `im:write` | Opening the verification DM with a user |
 | `users:read` | Showing Slack display names in game and checking linked accounts are still active |
