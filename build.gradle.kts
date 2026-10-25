@@ -13,6 +13,10 @@ dependencies {
 
     // Provided by Paper at runtime
     compileOnly("io.papermc.paper:paper-api:26.3.build.222-stable")
+
+    testImplementation(platform("org.junit:junit-bom:6.1.3"))
+    testImplementation("org.junit.jupiter:junit-jupiter")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
 tasks {
@@ -25,6 +29,16 @@ tasks {
         options.encoding = Charsets.UTF_8.name()
         // Paper 26.3 runs on Java 25
         options.release.set(25)
+    }
+
+    test {
+        useJUnitPlatform()
+        // The env vars click-to-link uses, which Bolt also reads on its own
+        environment("SLACK_CLIENT_ID", "123.456")
+        environment("SLACK_CLIENT_SECRET", "test-secret")
+        environment("SLACK_SCOPES", "chat:write")
+        environment("SLACK_USER_SCOPES", "users:read,chat:write")
+        environment("SLACK_REDIRECT_URI", "https://example.com/slack/callback")
     }
 
     javadoc {

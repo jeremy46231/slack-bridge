@@ -13,7 +13,6 @@ import app.jer.slackbridge.SlackBridgePlugin;
 import app.jer.slackbridge.TokenCipher;
 import app.jer.slackbridge.playermessages.SlackMessages;
 import com.slack.api.bolt.App;
-import com.slack.api.bolt.AppConfig;
 import com.slack.api.bolt.context.builtin.EventContext;
 import com.slack.api.bolt.response.Response;
 import com.slack.api.bolt.socket_mode.SocketModeApp;
@@ -128,7 +127,7 @@ public class SlackBot implements Listener {
     this.linkCodeExpirationMillis =
         plugin.getConfig().getLong("settings.slack-link.link-code-expiration", 60 * 10) * 1000;
 
-    this.app = new App(AppConfig.builder().singleTeamBotToken(this.botToken).build());
+    this.app = new App(BoltConfig.singleWorkspace(this.botToken));
     var auth = this.app.client().authTest(r -> r.token(this.botToken));
     if (!auth.isOk()) {
       throw new IllegalStateException("Slack auth.test failed: " + auth.getError());
