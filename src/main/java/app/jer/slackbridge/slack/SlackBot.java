@@ -79,6 +79,10 @@ public class SlackBot implements Listener {
 
   }
 
+  private record MemberList(Set<String> members, long fetchedAt) {
+
+  }
+
   private final SlackBridgePlugin plugin;
   private final App app;
   private final SocketModeApp socketModeApp;
@@ -87,8 +91,9 @@ public class SlackBot implements Listener {
   private final String commandBase;
   private final long linkCodeExpirationMillis;
   private final Map<String, CachedUser> userCache = new ConcurrentHashMap<>();
-  private volatile Set<String> channelMembers = Set.of();
-  private long channelMembersFetchedAt = 0;
+  // Extra channels whose members are let in and added to the bridge channel (channel mode only)
+  private final List<String> admitChannelIds;
+  private final Map<String, MemberList> channelMembers = new ConcurrentHashMap<>();
   private volatile String channelName;
   // Posts to Slack in order without blocking the server thread
   private final ExecutorService outbox = Executors.newSingleThreadExecutor(
@@ -108,6 +113,7 @@ public class SlackBot implements Listener {
     String appToken = plugin.getSetting("app-token", "SLACK_APP_TOKEN");
     this.channelId = plugin.getSetting("channel-id", "SLACK_CHANNEL_ID");
     this.commandBase = plugin.getSetting("base-command", "SLACK_COMMAND").replaceFirst("^/", "");
+    this.admitChannelIds = plugin.getAdmitChannelIds();
     this.linkCodeExpirationMillis =
         plugin.getConfig().getLong("settings.slack-link.link-code-expiration", 60 * 10) * 1000;
 
@@ -172,7 +178,7 @@ public class SlackBot implements Listener {
       plugin.getLogger().info(
           "Received slack command from %s: \"/%s %s\"".formatted(userId, commandBase, text));
 
-      if (this.plugin.isChannelOnly() && !this.getChannelMembers().contains(userId)) {
+      if (this.plugin.isChannelOnly() && !this.getChannelMembers(this.channelId).contains(userId)) {
         return ctx.ack("Only members of <#%s> can use this command.".formatted(this.channelId));
       }
 
@@ -473,7 +479,8 @@ public class SlackBot implements Listener {
 
   /**
    * Whether a player may join. Unlinked accounts may not; deactivated Slack accounts may not; with
-   * requireChannel, the linked Slack account must also be a member of the bridge channel. If Slack
+   * requireChannel, the linked Slack account must also be a member of the bridge channel or of one
+   * of the admit channels, and members of an admit channel are added to the bridge channel. If Slack
    * can't be reached, linked accounts are let in, but channel membership falls back to the last list
    * fetched (and is denied if there is none).
    */
@@ -494,16 +501,51 @@ public class SlackBot implements Listener {
           "Could not check whether Slack account " + slackId + " is active; assuming it is", e);
     }
 
-    if (requireChannel && !this.getChannelMembers().contains(slackId)) {
-      return JoinCheck.NOT_IN_CHANNEL;
+    if (!requireChannel || this.getChannelMembers(this.channelId).contains(slackId)) {
+      return JoinCheck.ALLOWED;
     }
-    return JoinCheck.ALLOWED;
+    for (String admitChannelId : this.admitChannelIds) {
+      if (this.getChannelMembers(admitChannelId).contains(slackId)) {
+        this.inviteToBridgeChannel(slackId, admitChannelId);
+        return JoinCheck.ALLOWED;
+      }
+    }
+    return JoinCheck.NOT_IN_CHANNEL;
   }
 
-  /** Member IDs of the bridge channel, refreshed at most every CHANNEL_MEMBERS_CACHE_MILLIS. */
-  private synchronized Set<String> getChannelMembers() {
-    if (System.currentTimeMillis() - this.channelMembersFetchedAt < CHANNEL_MEMBERS_CACHE_MILLIS) {
-      return this.channelMembers;
+  /**
+   * Adds a member of an admit channel to the bridge channel. They're let in even if this fails
+   * (e.g. a guest account, or the bot lacks groups:write or channels:manage), since they qualify
+   * through the admit channel either way.
+   */
+  private void inviteToBridgeChannel(String slackId, String admitChannelId) {
+    try {
+      var res = app.client().conversationsInvite(
+          r -> r.token(this.botToken).channel(this.channelId).users(List.of(slackId)));
+      if (res.isOk() || "already_in_channel".equals(res.getError())) {
+        this.plugin.getLogger().info("Added Slack account " + slackId
+            + " to the bridge channel because they're in admit channel " + admitChannelId);
+        this.channelMembers.computeIfPresent(this.channelId, (id, list) -> {
+          Set<String> members = new HashSet<>(list.members());
+          members.add(slackId);
+          return new MemberList(Set.copyOf(members), list.fetchedAt());
+        });
+      } else {
+        this.plugin.getLogger().warning("Could not add Slack account " + slackId
+            + " to the bridge channel (" + res.getError() + "); letting them in anyway");
+      }
+    } catch (IOException | SlackApiException e) {
+      this.plugin.getLogger().log(Level.WARNING, "Could not add Slack account " + slackId
+          + " to the bridge channel; letting them in anyway", e);
+    }
+  }
+
+  /** Member IDs of a channel, refreshed at most every CHANNEL_MEMBERS_CACHE_MILLIS. */
+  private synchronized Set<String> getChannelMembers(String channelId) {
+    MemberList cached = this.channelMembers.get(channelId);
+    if (cached != null
+        && System.currentTimeMillis() - cached.fetchedAt() < CHANNEL_MEMBERS_CACHE_MILLIS) {
+      return cached.members();
     }
 
     Set<String> members = new HashSet<>();
@@ -512,7 +554,7 @@ public class SlackBot implements Listener {
       do {
         String page = cursor;
         var res = app.client().conversationsMembers(
-            r -> r.token(this.botToken).channel(this.channelId).limit(1000).cursor(page));
+            r -> r.token(this.botToken).channel(channelId).limit(1000).cursor(page));
         if (!res.isOk()) {
           throw new IOException("conversations.members failed: " + res.getError());
         }
@@ -521,14 +563,14 @@ public class SlackBot implements Listener {
             : res.getResponseMetadata().getNextCursor();
       } while (cursor != null && !cursor.isEmpty());
     } catch (IOException | SlackApiException e) {
-      this.plugin.getLogger().log(Level.WARNING,
-          "Could not list the Slack channel's members; using the last list fetched", e);
-      return this.channelMembers;
+      this.plugin.getLogger().log(Level.WARNING, "Could not list the members of Slack channel "
+          + channelId + "; using the last list fetched", e);
+      return cached == null ? Set.of() : cached.members();
     }
 
-    this.channelMembers = Set.copyOf(members);
-    this.channelMembersFetchedAt = System.currentTimeMillis();
-    return this.channelMembers;
+    Set<String> result = Set.copyOf(members);
+    this.channelMembers.put(channelId, new MemberList(result, System.currentTimeMillis()));
+    return result;
   }
 
   /** The bridge channel's name for kick messages, falling back to "the server's Slack channel". */

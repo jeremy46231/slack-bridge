@@ -23,6 +23,7 @@ What it does:
   `mc.example.com/slack/482913`, where players sign in to Slack.
 - **Join requirements** (optional): only let in players with a linked Slack account, or only those
   whose linked account is a member of the bridge channel, so the channel works as a whitelist.
+  Members of other channels you list can be let in too, and are added to the bridge channel.
   Operators always get in.
 
 Built for Paper 26.3 (Java 25). Package `app.jer.slackbridge`, plugin name `SlackBridge`, so it
@@ -62,7 +63,8 @@ Why each scope is there:
 | Scope | Used for |
 | --- | --- |
 | `channels:history`, `groups:history` | Receiving messages from the bridge channel (public or private) |
-| `channels:read`, `groups:read` | Listing the channel's members for `join-requirement: channel`, and its name for messages |
+| `channels:read`, `groups:read` | Listing the members of the bridge channel and any admit channels for `join-requirement: channel`, and the bridge channel's name for messages |
+| `groups:write` or `channels:manage` (only with `admit-channels`) | Adding admit-channel members to the bridge channel: `groups:write` if the bridge channel is private, `channels:manage` if it's public. Not in the manifest by default. |
 | `chat:write` | Posting to the channel and DMing people after they link |
 | `chat:write.customize` | Posting each player's chat under their Slack profile, or their Minecraft name and head |
 | `commands` | The slash command |
@@ -98,6 +100,7 @@ settings:
   slack-link:
     enabled: true          # turn the bridge on
     join-requirement: "none"  # none, linked or channel; see "Join requirements" below
+    admit-channels: []     # with channel: more channel IDs whose members get in; empty = SLACK_ADMIT_CHANNELS
     link-code-expiration: 600 # seconds a player's link address works
     bot-token: ""          # leave empty to use SLACK_BOT_TOKEN
     app-token: ""          # leave empty to use SLACK_APP_TOKEN
@@ -121,8 +124,8 @@ settings:
 Secrets and per-server values can live in the config file or in environment variables. Environment
 variables are the better fit for a container: on the itzg/minecraft-server image every container
 environment variable reaches the server process, so set `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`,
-`SLACK_CHANNEL_ID`, `SLACK_COMMAND`, `SLACK_PUBLIC_URL`, `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`
-and `SLACK_TOKEN_KEY` on the deployment, the secrets as secrets, and leave those config values
+`SLACK_CHANNEL_ID`, `SLACK_COMMAND`, `SLACK_PUBLIC_URL`, `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`,
+`SLACK_TOKEN_KEY` and `SLACK_ADMIT_CHANNELS` (comma-separated channel IDs) on the deployment, the secrets as secrets, and leave those config values
 empty. Restart the server after changing either.
 
 If `enabled` is true but a token, the channel ID or the slash command is missing, the plugin logs
@@ -253,8 +256,14 @@ the bridge channel can use it:
   browser; once they've linked they can join. Linked accounts whose Slack user has been deactivated
   are turned away the same way.
 - With `channel`, a linked player who isn't in the channel is told which channel to ask to join, and
-  only channel members can use the Slack slash command. The member list is fetched from Slack at
-  most once a minute.
+  only channel members can use the Slack slash command. Member lists are fetched from Slack at most
+  once a minute per channel.
+- `admit-channels` (with `channel` only) lists more channel IDs whose members may join. When a
+  linked player is in one of them but not the bridge channel, the bot adds them to the bridge channel
+  and lets them in. If adding them fails (a guest account, or a missing scope), they're let in
+  anyway and the log says why. The bot must be a member of each admit channel to list its members,
+  and needs `groups:write` (private bridge channel) or `channels:manage` (public bridge channel) to
+  add people; reinstall the app after adding a scope.
 - If Slack can't be reached once the bot is connected, linked players are let in under `linked`.
   Under `channel` the last member list fetched is used, and nobody but operators gets in if none has
   been fetched yet.

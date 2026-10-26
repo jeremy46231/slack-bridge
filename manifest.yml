@@ -8,6 +8,9 @@
 # Web linking: replace the redirect URL with <your public-url>/slack/callback. The user scopes are
 # what players are asked for when they link: users:read tells the plugin who they are, and
 # chat:write (optional, players can uncheck it) lets their Minecraft chat post as them.
+#
+# admit-channels: to have the bot add members of those channels to the bridge channel, uncomment
+# groups:write (private bridge channel) or channels:manage (public bridge channel) below.
 display_information:
   name: Minecraft
   description: Bridges chat between a Minecraft server and Slack
@@ -36,6 +39,8 @@ oauth_config:
       - commands
       - im:write
       - users:read
+      # - groups:write
+      # - channels:manage
     user:
       - users:read
       - chat:write

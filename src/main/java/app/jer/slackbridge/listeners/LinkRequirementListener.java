@@ -15,8 +15,8 @@ import org.bukkit.event.player.AsyncPlayerPreLoginEvent.Result;
 
 /**
  * Turns away players who don't meet settings.slack-link.join-requirement: "linked" needs a linked
- * Slack account, "channel" also needs that account to be in the bridge channel. Operators always
- * get in. Minecraft's own whitelist still applies on top of this.
+ * Slack account, "channel" also needs that account to be in the bridge channel or an admit channel.
+ * Operators always get in. Minecraft's own whitelist still applies on top of this.
  */
 public class LinkRequirementListener implements Listener {
 

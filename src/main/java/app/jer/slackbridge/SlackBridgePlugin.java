@@ -6,6 +6,8 @@ import app.jer.slackbridge.LinkStore.Link;
 import app.jer.slackbridge.slack.SlackBot;
 import app.jer.slackbridge.web.LinkWebServer;
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 import java.util.logging.Level;
@@ -80,6 +82,9 @@ public class SlackBridgePlugin extends JavaPlugin {
         this.getLogger().warning("join-requirement is ignored while Slack is disabled");
       }
     }
+    if (this.joinRequirement != JoinRequirement.CHANNEL && !this.getAdmitChannelIds().isEmpty()) {
+      this.getLogger().warning("admit-channels is ignored unless join-requirement is channel");
+    }
   }
 
   @Override
@@ -153,6 +158,19 @@ public class SlackBridgePlugin extends JavaPlugin {
   /** In channel mode, only members of the bridge channel may join or use the Slack command. */
   public boolean isChannelOnly() {
     return this.joinRequirement == JoinRequirement.CHANNEL;
+  }
+
+  /**
+   * Channel IDs from settings.slack-link.admit-channels, or the comma-separated SLACK_ADMIT_CHANNELS
+   * environment variable if that's empty.
+   */
+  public List<String> getAdmitChannelIds() {
+    List<String> ids = this.getConfig().getStringList("settings.slack-link.admit-channels");
+    if (ids.isEmpty()) {
+      String env = System.getenv("SLACK_ADMIT_CHANNELS");
+      ids = env == null ? List.of() : Arrays.asList(env.split(","));
+    }
+    return ids.stream().map(String::trim).filter(id -> !id.isEmpty()).distinct().toList();
   }
 
   /** Starts web linking, which needs a public URL and the Slack app's OAuth credentials. */

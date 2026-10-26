@@ -8,6 +8,12 @@ settings:
     #   channel - linked players whose Slack account is also a member of channel-id
     # Server operators always bypass this, and Minecraft's whitelist still applies on top of it.
     join-requirement: "none"
+    # With join-requirement "channel": more Slack channel IDs whose members may join. A linked player
+    # in one of these but not in channel-id is added to channel-id and let in (and let in anyway if
+    # adding them fails). The bot must be in each of these channels, and needs the groups:write scope
+    # (private channel-id) or channels:manage (public channel-id) to add people. Leave empty to read
+    # the comma-separated SLACK_ADMIT_CHANNELS environment variable.
+    admit-channels: []
     # Time in seconds a player's link address works
     link-code-expiration: 600
     # The Slack bot token (xoxb-...). Leave empty to read the SLACK_BOT_TOKEN environment variable.
