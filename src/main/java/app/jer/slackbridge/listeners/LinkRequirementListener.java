@@ -20,6 +20,9 @@ import org.bukkit.event.player.AsyncPlayerPreLoginEvent.Result;
  */
 public class LinkRequirementListener implements Listener {
 
+  // How long a join waits for Slack while the bot is still connecting after startup
+  private static final long BOT_STARTUP_WAIT_MILLIS = 15 * 1000;
+
   private final SlackBridgePlugin plugin;
   private final boolean requireChannel;
 
@@ -39,7 +42,8 @@ public class LinkRequirementListener implements Listener {
       return;
     }
 
-    SlackBot bot = this.plugin.getSlackBot();
+    // Runs off the server thread, so waiting here only holds up this player's login
+    SlackBot bot = this.plugin.awaitSlackBot(BOT_STARTUP_WAIT_MILLIS);
     if (bot == null) {
       event.disallow(Result.KICK_WHITELIST, SlackMessages.slackRequiredButUnavailable());
       return;

@@ -133,7 +133,8 @@ which one and stays off. If it can't connect to Slack (Slack is down, the networ
 token is wrong), it logs the error and tries again after 30 seconds, doubling the wait up to every 5
 minutes until it connects; once connected, Slack's Socket Mode client reconnects on its own. While
 it isn't connected, only operators can join if a join requirement is on, so check the log after
-setting it up.
+setting it up. Players who join while the first connection after startup is still in progress wait
+up to 15 seconds for it instead of being turned away.
 
 `slack-name` sets what in-game messages call the workspace; for the Hack Club Slack, use
 `"the Hack Club Slack"`.

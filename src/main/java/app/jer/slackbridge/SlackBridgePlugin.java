@@ -10,6 +10,8 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import org.bukkit.command.PluginCommand;
 import org.bukkit.plugin.IllegalPluginAccessException;
@@ -32,6 +34,8 @@ public class SlackBridgePlugin extends JavaPlugin {
   private JoinRequirement joinRequirement = JoinRequirement.NONE;
   private volatile SlackBot bot;
   private int failedStarts = 0;
+  // Released once the first attempt to reach Slack has finished, whether or not it worked
+  private final CountDownLatch firstStart = new CountDownLatch(1);
 
   @Override
   public void onEnable() {
@@ -61,7 +65,10 @@ public class SlackBridgePlugin extends JavaPlugin {
         this.startWebServer();
       } else {
         this.getLogger().severe("Slack is enabled but " + missing + " not set; see the README");
+        this.firstStart.countDown();
       }
+    } else {
+      this.firstStart.countDown();
     }
 
     // Register commands
@@ -98,11 +105,13 @@ public class SlackBridgePlugin extends JavaPlugin {
       stopBot(bot);
       this.bot = null;
     }
+    this.firstStart.countDown();
   }
 
   /** Connects to Slack, and if that fails, tries again later. Runs off the server thread. */
   private void startBot() {
     if (!this.isEnabled()) {
+      this.firstStart.countDown();
       return;
     }
 
@@ -125,6 +134,7 @@ public class SlackBridgePlugin extends JavaPlugin {
       } catch (IllegalPluginAccessException ignored) {
         // The plugin was disabled meanwhile; stop retrying
       }
+      this.firstStart.countDown();
       return;
     }
 
@@ -133,6 +143,7 @@ public class SlackBridgePlugin extends JavaPlugin {
     }
     // Set right away so onDisable can always find the bot to disconnect it
     this.bot = newBot;
+    this.firstStart.countDown();
     try {
       this.getServer().getScheduler().runTask(this,
           () -> this.getServer().getPluginManager().registerEvents(newBot, this));
@@ -263,6 +274,20 @@ public class SlackBridgePlugin extends JavaPlugin {
   }
 
   public SlackBot getSlackBot() {
+    return this.bot;
+  }
+
+  /**
+   * The Slack bot, waiting up to timeoutMillis if the first attempt to connect is still running
+   * (e.g. right after startup). Returns null at once if that attempt already failed. Call only off
+   * the server thread.
+   */
+  public SlackBot awaitSlackBot(long timeoutMillis) {
+    try {
+      this.firstStart.await(timeoutMillis, TimeUnit.MILLISECONDS);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+    }
     return this.bot;
   }
 
