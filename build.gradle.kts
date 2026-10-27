@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "app.jer.slackbridge"
-version = "1.3.0"
+version = "1.3.1"
 description = "Two-way Slack chat bridge and Slack account linking, forked from HCCore."
 
 dependencies {
